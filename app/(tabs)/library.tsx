@@ -5,12 +5,14 @@ import {
   ActivityIndicator, Alert, Image, ScrollView
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { Colors, Spacing, Typography, Radius, Shadows } from '@/constants/theme';
 
 const CATEGORIES = ['Furniture', 'Props', 'Lighting', 'Textiles', 'Vehicles', 'Artwork', 'Appliances', 'Other'];
+const REMOVE_BG_API_KEY = process.env.EXPO_PUBLIC_REMOVE_BG_API_KEY!;
 
 interface Asset {
   id: string;
@@ -19,6 +21,35 @@ interface Asset {
   image_url: string;
   source: string | null;
   is_available: boolean;
+}
+
+async function removeBackground(imageUri: string): Promise<Uint8Array> {
+  // Read file as base64
+  const base64 = await FileSystem.readAsStringAsync(imageUri, {
+    encoding: 'base64' as any,
+  });
+
+  // Send as base64 to Remove.bg
+  const response = await fetch('https://api.remove.bg/v1.0/removebg', {
+    method: 'POST',
+    headers: {
+      'X-Api-Key': REMOVE_BG_API_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      image_file_b64: base64,
+      size: 'auto',
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error?.errors?.[0]?.title ?? 'Background removal failed');
+  }
+
+  // Get response as array buffer
+  const arrayBuffer = await response.arrayBuffer();
+  return new Uint8Array(arrayBuffer);
 }
 
 export default function LibraryScreen() {
@@ -34,6 +65,8 @@ export default function LibraryScreen() {
   const [newSource, setNewSource] = useState('');
   const [newImageUri, setNewImageUri] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<string>('');
+  const [removeBg, setRemoveBg] = useState(true);
 
   async function fetchAssets() {
     setLoading(true);
@@ -85,17 +118,42 @@ export default function LibraryScreen() {
     }
     if (!user) return;
 
+    console.log('API Key:', REMOVE_BG_API_KEY ? 'loaded' : 'MISSING');
+
     setUploading(true);
     try {
-      // Upload image
-      const filename = `assets/${user.id}/${Date.now()}.jpg`;
-      const response = await fetch(newImageUri);
-      const blob = await response.blob();
-      const arrayBuffer = await new Response(blob).arrayBuffer();
+      let uploadData: Uint8Array | ArrayBuffer;
+      let contentType: string;
+      let fileExtension: string;
+
+      if (removeBg) {
+        setUploadStatus('Removing background...');
+        uploadData = await removeBackground(newImageUri);
+        contentType = 'image/png';
+        fileExtension = 'png';
+      } else {
+        setUploadStatus('Uploading photo...');
+        const base64 = await FileSystem.readAsStringAsync(newImageUri, {
+          encoding: 'base64' as any,
+        });
+        // Convert base64 to Uint8Array
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        uploadData = bytes;
+        contentType = 'image/jpeg';
+        fileExtension = 'jpg';
+      }
+
+      // Upload to Supabase Storage
+      setUploadStatus('Saving to library...');
+      const filename = `assets/${user.id}/${Date.now()}.${fileExtension}`;
 
       const { error: uploadError } = await supabase.storage
         .from('assets')
-        .upload(filename, arrayBuffer, { contentType: 'image/jpeg' });
+        .upload(filename, uploadData, { contentType });
 
       if (uploadError) throw uploadError;
 
@@ -103,7 +161,7 @@ export default function LibraryScreen() {
         .from('assets')
         .getPublicUrl(filename);
 
-      // Create asset record (global — no project_id for shared library)
+      // Create asset record
       const { error: assetError } = await supabase
         .from('assets')
         .insert({
@@ -117,16 +175,18 @@ export default function LibraryScreen() {
 
       if (assetError) throw assetError;
 
-      // Reset form
       setNewName('');
       setNewCategory('Props');
       setNewSource('');
       setNewImageUri(null);
+      setUploadStatus('');
       setModalVisible(false);
       fetchAssets();
 
     } catch (e: any) {
+      console.error('Asset upload error:', e);
       Alert.alert('Error', e.message || 'Could not add asset.');
+      setUploadStatus('');
     } finally {
       setUploading(false);
     }
@@ -177,11 +237,13 @@ export default function LibraryScreen() {
           refreshing={loading}
           renderItem={({ item }) => (
             <TouchableOpacity style={styles.card}>
-              <Image
-                source={{ uri: item.image_url }}
-                style={styles.cardImage}
-                resizeMode="cover"
-              />
+              <View style={styles.cardImageContainer}>
+                <Image
+                  source={{ uri: item.image_url }}
+                  style={styles.cardImage}
+                  resizeMode="contain"
+                />
+              </View>
               <View style={styles.cardBody}>
                 <Text style={styles.cardName} numberOfLines={1}>{item.name}</Text>
                 <Text style={styles.cardCategory}>{item.category}</Text>
@@ -206,16 +268,12 @@ export default function LibraryScreen() {
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Add Asset</Text>
-              <TouchableOpacity onPress={() => { setModalVisible(false); setNewImageUri(null); }}>
+              <TouchableOpacity onPress={() => { setModalVisible(false); setNewImageUri(null); setUploadStatus(''); }}>
                 <Ionicons name="close" size={24} color={Colors.textMuted} />
               </TouchableOpacity>
             </View>
 
-            {/* Photo picker */}
-            <TouchableOpacity
-              style={styles.photoPicker}
-              onPress={handleTakePhoto}
-            >
+            <TouchableOpacity style={styles.photoPicker} onPress={handleTakePhoto}>
               {newImageUri ? (
                 <Image source={{ uri: newImageUri }} style={styles.photoPreview} resizeMode="cover" />
               ) : (
@@ -246,6 +304,20 @@ export default function LibraryScreen() {
               onChangeText={setNewSource}
             />
 
+            {/* Background removal toggle */}
+            <TouchableOpacity style={styles.toggleRow} onPress={() => setRemoveBg(!removeBg)}>
+              <View style={styles.toggleInfo}>
+                <Ionicons name="cut-outline" size={18} color={Colors.primary} />
+                <View>
+                  <Text style={styles.toggleLabel}>Remove Background</Text>
+                  <Text style={styles.toggleSub}>Creates transparent PNG for canvas overlay</Text>
+                </View>
+              </View>
+              <View style={[styles.toggle, removeBg && styles.toggleActive]}>
+                <View style={[styles.toggleThumb, removeBg && styles.toggleThumbActive]} />
+              </View>
+            </TouchableOpacity>
+
             {/* Category selector */}
             <Text style={styles.label}>Category</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: Spacing.md }}>
@@ -267,11 +339,23 @@ export default function LibraryScreen() {
               onPress={handleAddAsset}
               disabled={uploading}
             >
-              {uploading
-                ? <ActivityIndicator color="#000" />
-                : <Text style={styles.createButtonText}>Add to Library</Text>
-              }
+              {uploading ? (
+                <View style={styles.uploadingRow}>
+                  <ActivityIndicator color="#000" size="small" />
+                  <Text style={styles.uploadingText}>{uploadStatus || 'Processing...'}</Text>
+                </View>
+              ) : (
+                <Text style={styles.createButtonText}>
+                  {removeBg ? '✨ Add with Background Removed' : 'Add to Library'}
+                </Text>
+              )}
             </TouchableOpacity>
+
+            {removeBg && (
+              <Text style={styles.bgTip}>
+                💡 Tip: Photograph props against a plain wall or floor for best results.
+              </Text>
+            )}
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -322,14 +406,13 @@ const styles = StyleSheet.create({
     borderColor: Colors.surfaceBorder,
     ...Shadows.card,
   },
-  cardImage: { width: '100%', height: 140 },
+  cardImageContainer: { width: '100%', height: 140, backgroundColor: Colors.surface },
+  cardImage: { width: '100%', height: '100%' },
   cardBody: { padding: Spacing.sm },
   cardName: { color: Colors.textPrimary, fontSize: Typography.fontSizeSm, fontWeight: Typography.fontWeightSemibold },
   cardCategory: { color: Colors.textMuted, fontSize: Typography.fontSizeXs, marginTop: 2, textTransform: 'capitalize' },
   empty: { alignItems: 'center', marginTop: Spacing.xxl, paddingHorizontal: Spacing.xl },
   emptyText: { color: Colors.textMuted, fontSize: Typography.fontSizeSm, marginTop: Spacing.md, textAlign: 'center', lineHeight: 22 },
-
-  // Modal
   modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
   modalSheet: {
     backgroundColor: Colors.surfaceElevated,
@@ -367,6 +450,24 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm + 4,
     marginBottom: Spacing.md,
   },
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    marginBottom: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.surfaceBorder,
+  },
+  toggleInfo: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, flex: 1 },
+  toggleLabel: { color: Colors.textPrimary, fontSize: Typography.fontSizeSm, fontWeight: Typography.fontWeightSemibold },
+  toggleSub: { color: Colors.textMuted, fontSize: 10, marginTop: 1 },
+  toggle: { width: 44, height: 24, borderRadius: 12, backgroundColor: Colors.surfaceBorder, padding: 2, justifyContent: 'center' },
+  toggleActive: { backgroundColor: Colors.primary },
+  toggleThumb: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#fff' },
+  toggleThumbActive: { alignSelf: 'flex-end' },
   createButton: {
     backgroundColor: Colors.primary,
     borderRadius: Radius.md,
@@ -377,4 +478,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   createButtonText: { color: '#000', fontSize: Typography.fontSizeMd, fontWeight: Typography.fontWeightBold },
+  uploadingRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  uploadingText: { color: '#000', fontSize: Typography.fontSizeSm, fontWeight: Typography.fontWeightSemibold },
+  bgTip: { color: Colors.textMuted, fontSize: Typography.fontSizeXs, textAlign: 'center', marginTop: Spacing.sm, lineHeight: 18 },
 });
