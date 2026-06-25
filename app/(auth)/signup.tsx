@@ -13,16 +13,16 @@ export default function SignupScreen() {
   const [loading, setLoading] = useState(false);
 
   async function handleSignup() {
-    setError(null);
-    setLoading(true);
-    const { error } = await signUp(email, password);
-    setLoading(false);
-    if (error) {
-      setError(error);
-    } else {
-      setSuccess(true);
-    }
+  setError(null);
+  setLoading(true);
+  const { error } = await signUp(email, password);
+  setLoading(false);
+  if (error) {
+    setError(error);
   }
+  // No success state needed — AuthContext session 
+  // change will auto-redirect via root layout
+}
 
   return (
     <KeyboardAvoidingView

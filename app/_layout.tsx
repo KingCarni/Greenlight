@@ -10,16 +10,16 @@ function RootNavigator() {
   const router = useRouter();
 
   useEffect(() => {
-    if (loading) return;
+  if (loading) return;
 
-    const inAuthGroup = segments[0] === '(auth)';
+  const inAuthGroup = segments[0] === '(auth)';
 
-    if (!session && !inAuthGroup) {
-      router.replace('/(auth)/login');
-    } else if (session && inAuthGroup) {
-      router.replace('/(tabs)/projects');
-    }
-  }, [session, loading, segments]);
+  if (!session && !inAuthGroup) {
+    router.replace('/(auth)/login');
+  } else if (session && inAuthGroup) {
+    router.replace('/(tabs)/projects');
+  }
+}, [session, loading]); // ← remove segments from deps
 
   return (
     <Stack screenOptions={{ headerShown: false }}>

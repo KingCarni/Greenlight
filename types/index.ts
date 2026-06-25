@@ -10,7 +10,7 @@ export interface Profile {
 export interface Project {
   id: string;
   owner_id: string;
-  title: string;
+  name: string;
   description: string | null;
   thumbnail_url: string | null;
   genre: string | null;
