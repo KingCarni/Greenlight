@@ -21,33 +21,28 @@ interface Asset {
   image_url: string;
   source: string | null;
   is_available: boolean;
+  width_cm: number | null;
+  height_cm: number | null;
+  depth_cm: number | null;
+  storage_location: string | null;
 }
 
 async function removeBackground(imageUri: string): Promise<Uint8Array> {
-  // Read file as base64
   const base64 = await FileSystem.readAsStringAsync(imageUri, {
     encoding: 'base64' as any,
   });
-
-  // Send as base64 to Remove.bg
   const response = await fetch('https://api.remove.bg/v1.0/removebg', {
     method: 'POST',
     headers: {
       'X-Api-Key': REMOVE_BG_API_KEY,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      image_file_b64: base64,
-      size: 'auto',
-    }),
+    body: JSON.stringify({ image_file_b64: base64, size: 'auto' }),
   });
-
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error?.errors?.[0]?.title ?? 'Background removal failed');
   }
-
-  // Get response as array buffer
   const arrayBuffer = await response.arrayBuffer();
   return new Uint8Array(arrayBuffer);
 }
@@ -58,11 +53,16 @@ export default function LibraryScreen() {
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [detailAsset, setDetailAsset] = useState<Asset | null>(null);
 
-  // New asset form
+  // Form state
   const [newName, setNewName] = useState('');
   const [newCategory, setNewCategory] = useState('Props');
   const [newSource, setNewSource] = useState('');
+  const [newStorageLocation, setNewStorageLocation] = useState('');
+  const [newWidth, setNewWidth] = useState('');
+  const [newHeight, setNewHeight] = useState('');
+  const [newDepth, setNewDepth] = useState('');
   const [newImageUri, setNewImageUri] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string>('');
@@ -74,11 +74,9 @@ export default function LibraryScreen() {
       .from('assets')
       .select('*')
       .order('created_at', { ascending: false });
-
     if (selectedCategory) {
       query = query.eq('category', selectedCategory.toLowerCase());
     }
-
     const { data, error } = await query;
     if (error) console.error('Error fetching assets:', error.message);
     else setAssets(data as Asset[]);
@@ -87,14 +85,24 @@ export default function LibraryScreen() {
 
   useEffect(() => { fetchAssets(); }, [selectedCategory]);
 
+  function resetForm() {
+    setNewName('');
+    setNewCategory('Props');
+    setNewSource('');
+    setNewStorageLocation('');
+    setNewWidth('');
+    setNewHeight('');
+    setNewDepth('');
+    setNewImageUri(null);
+    setUploadStatus('');
+  }
+
   async function handlePickImage() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.8,
     });
-    if (!result.canceled && result.assets[0]) {
-      setNewImageUri(result.assets[0].uri);
-    }
+    if (!result.canceled && result.assets[0]) setNewImageUri(result.assets[0].uri);
   }
 
   async function handleTakePhoto() {
@@ -102,23 +110,13 @@ export default function LibraryScreen() {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.8,
     });
-    if (!result.canceled && result.assets[0]) {
-      setNewImageUri(result.assets[0].uri);
-    }
+    if (!result.canceled && result.assets[0]) setNewImageUri(result.assets[0].uri);
   }
 
   async function handleAddAsset() {
-    if (!newName.trim()) {
-      Alert.alert('Required', 'Please enter a name for this asset.');
-      return;
-    }
-    if (!newImageUri) {
-      Alert.alert('Required', 'Please add a photo of this asset.');
-      return;
-    }
+    if (!newName.trim()) { Alert.alert('Required', 'Please enter a name for this asset.'); return; }
+    if (!newImageUri) { Alert.alert('Required', 'Please add a photo of this asset.'); return; }
     if (!user) return;
-
-    console.log('API Key:', REMOVE_BG_API_KEY ? 'loaded' : 'MISSING');
 
     setUploading(true);
     try {
@@ -133,56 +131,40 @@ export default function LibraryScreen() {
         fileExtension = 'png';
       } else {
         setUploadStatus('Uploading photo...');
-        const base64 = await FileSystem.readAsStringAsync(newImageUri, {
-          encoding: 'base64' as any,
-        });
-        // Convert base64 to Uint8Array
+        const base64 = await FileSystem.readAsStringAsync(newImageUri, { encoding: 'base64' as any });
         const binary = atob(base64);
         const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) {
-          bytes[i] = binary.charCodeAt(i);
-        }
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
         uploadData = bytes;
         contentType = 'image/jpeg';
         fileExtension = 'jpg';
       }
 
-      // Upload to Supabase Storage
       setUploadStatus('Saving to library...');
       const filename = `assets/${user.id}/${Date.now()}.${fileExtension}`;
-
       const { error: uploadError } = await supabase.storage
-        .from('assets')
-        .upload(filename, uploadData, { contentType });
-
+        .from('assets').upload(filename, uploadData, { contentType });
       if (uploadError) throw uploadError;
 
-      const { data: urlData } = supabase.storage
-        .from('assets')
-        .getPublicUrl(filename);
+      const { data: urlData } = supabase.storage.from('assets').getPublicUrl(filename);
 
-      // Create asset record
-      const { error: assetError } = await supabase
-        .from('assets')
-        .insert({
-          name: newName.trim(),
-          category: newCategory.toLowerCase(),
-          image_url: urlData.publicUrl,
-          source: newSource.trim() || null,
-          uploaded_by: user.id,
-          is_available: true,
-        });
-
+      const { error: assetError } = await supabase.from('assets').insert({
+        name: newName.trim(),
+        category: newCategory.toLowerCase(),
+        image_url: urlData.publicUrl,
+        source: newSource.trim() || null,
+        storage_location: newStorageLocation.trim() || null,
+        width_cm: newWidth ? parseFloat(newWidth) : null,
+        height_cm: newHeight ? parseFloat(newHeight) : null,
+        depth_cm: newDepth ? parseFloat(newDepth) : null,
+        uploaded_by: user.id,
+        is_available: true,
+      });
       if (assetError) throw assetError;
 
-      setNewName('');
-      setNewCategory('Props');
-      setNewSource('');
-      setNewImageUri(null);
-      setUploadStatus('');
+      resetForm();
       setModalVisible(false);
       fetchAssets();
-
     } catch (e: any) {
       console.error('Asset upload error:', e);
       Alert.alert('Error', e.message || 'Could not add asset.');
@@ -192,12 +174,20 @@ export default function LibraryScreen() {
     }
   }
 
+  function formatDimensions(asset: Asset) {
+    const parts = [];
+    if (asset.width_cm) parts.push(`W${asset.width_cm}`);
+    if (asset.height_cm) parts.push(`H${asset.height_cm}`);
+    if (asset.depth_cm) parts.push(`D${asset.depth_cm}`);
+    return parts.length > 0 ? parts.join(' × ') + ' cm' : null;
+  }
+
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>Library</Text>
-        <TouchableOpacity style={styles.addButton} onPress={() => setModalVisible(true)}>
+        <TouchableOpacity style={styles.addButton} onPress={() => { resetForm(); setModalVisible(true); }}>
           <Ionicons name="add" size={22} color="#000" />
         </TouchableOpacity>
       </View>
@@ -223,9 +213,7 @@ export default function LibraryScreen() {
 
       {/* Asset grid */}
       {loading ? (
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color={Colors.primary} />
-        </View>
+        <View style={styles.centered}><ActivityIndicator size="large" color={Colors.primary} /></View>
       ) : (
         <FlatList
           data={assets}
@@ -236,17 +224,22 @@ export default function LibraryScreen() {
           onRefresh={fetchAssets}
           refreshing={loading}
           renderItem={({ item }) => (
-            <TouchableOpacity style={styles.card}>
+            <TouchableOpacity style={styles.card} onPress={() => setDetailAsset(item)}>
               <View style={styles.cardImageContainer}>
-                <Image
-                  source={{ uri: item.image_url }}
-                  style={styles.cardImage}
-                  resizeMode="contain"
-                />
+                <Image source={{ uri: item.image_url }} style={styles.cardImage} resizeMode="contain" />
               </View>
               <View style={styles.cardBody}>
                 <Text style={styles.cardName} numberOfLines={1}>{item.name}</Text>
                 <Text style={styles.cardCategory}>{item.category}</Text>
+                {formatDimensions(item) && (
+                  <Text style={styles.cardDimensions}>{formatDimensions(item)}</Text>
+                )}
+                {item.storage_location && (
+                  <View style={styles.locationRow}>
+                    <Ionicons name="location-outline" size={10} color={Colors.textMuted} />
+                    <Text style={styles.cardLocation} numberOfLines={1}>{item.storage_location}</Text>
+                  </View>
+                )}
               </View>
             </TouchableOpacity>
           )}
@@ -259,104 +252,185 @@ export default function LibraryScreen() {
         />
       )}
 
+      {/* Asset detail modal */}
+      <Modal visible={!!detailAsset} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{detailAsset?.name}</Text>
+              <TouchableOpacity onPress={() => setDetailAsset(null)}>
+                <Ionicons name="close" size={24} color={Colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+            {detailAsset && (
+              <>
+                <Image source={{ uri: detailAsset.image_url }} style={styles.detailImage} resizeMode="contain" />
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Category</Text>
+                  <Text style={styles.detailValue}>{detailAsset.category}</Text>
+                </View>
+                {detailAsset.source && (
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Source</Text>
+                    <Text style={styles.detailValue}>{detailAsset.source}</Text>
+                  </View>
+                )}
+                {detailAsset.storage_location && (
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Storage Location</Text>
+                    <Text style={styles.detailValue}>{detailAsset.storage_location}</Text>
+                  </View>
+                )}
+                {formatDimensions(detailAsset) && (
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Dimensions</Text>
+                    <Text style={styles.detailValue}>{formatDimensions(detailAsset)}</Text>
+                  </View>
+                )}
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
       {/* Add Asset Modal */}
       <Modal visible={modalVisible} animationType="slide" transparent>
         <KeyboardAvoidingView
           style={styles.modalOverlay}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add Asset</Text>
-              <TouchableOpacity onPress={() => { setModalVisible(false); setNewImageUri(null); setUploadStatus(''); }}>
-                <Ionicons name="close" size={24} color={Colors.textMuted} />
+          <ScrollView contentContainerStyle={styles.modalScrollContent}>
+            <View style={styles.modalSheet}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Add Asset</Text>
+                <TouchableOpacity onPress={() => { setModalVisible(false); resetForm(); }}>
+                  <Ionicons name="close" size={24} color={Colors.textMuted} />
+                </TouchableOpacity>
+              </View>
+
+              {/* Photo picker */}
+              <TouchableOpacity style={styles.photoPicker} onPress={handleTakePhoto}>
+                {newImageUri ? (
+                  <Image source={{ uri: newImageUri }} style={styles.photoPreview} resizeMode="cover" />
+                ) : (
+                  <View style={styles.photoPlaceholder}>
+                    <Ionicons name="camera-outline" size={32} color={Colors.textMuted} />
+                    <Text style={styles.photoPlaceholderText}>Tap to photograph asset</Text>
+                  </View>
+                )}
               </TouchableOpacity>
-            </View>
 
-            <TouchableOpacity style={styles.photoPicker} onPress={handleTakePhoto}>
-              {newImageUri ? (
-                <Image source={{ uri: newImageUri }} style={styles.photoPreview} resizeMode="cover" />
-              ) : (
-                <View style={styles.photoPlaceholder}>
-                  <Ionicons name="camera-outline" size={32} color={Colors.textMuted} />
-                  <Text style={styles.photoPlaceholderText}>Tap to photograph asset</Text>
-                </View>
-              )}
-            </TouchableOpacity>
+              <TouchableOpacity style={styles.galleryLink} onPress={handlePickImage}>
+                <Text style={styles.galleryLinkText}>Or choose from gallery</Text>
+              </TouchableOpacity>
 
-            <TouchableOpacity style={styles.galleryLink} onPress={handlePickImage}>
-              <Text style={styles.galleryLinkText}>Or choose from gallery</Text>
-            </TouchableOpacity>
+              <TextInput
+                style={styles.input}
+                placeholder="Asset name *"
+                placeholderTextColor={Colors.textMuted}
+                value={newName}
+                onChangeText={setNewName}
+              />
 
-            <TextInput
-              style={styles.input}
-              placeholder="Asset name *"
-              placeholderTextColor={Colors.textMuted}
-              value={newName}
-              onChangeText={setNewName}
-            />
+              <TextInput
+                style={styles.input}
+                placeholder="Source (e.g. IKEA, Prop house)"
+                placeholderTextColor={Colors.textMuted}
+                value={newSource}
+                onChangeText={setNewSource}
+              />
 
-            <TextInput
-              style={styles.input}
-              placeholder="Source (e.g. IKEA, Prop house)"
-              placeholderTextColor={Colors.textMuted}
-              value={newSource}
-              onChangeText={setNewSource}
-            />
+              <TextInput
+                style={styles.input}
+                placeholder="Storage location (e.g. Shelf B3, Truck 2)"
+                placeholderTextColor={Colors.textMuted}
+                value={newStorageLocation}
+                onChangeText={setNewStorageLocation}
+              />
 
-            {/* Background removal toggle */}
-            <TouchableOpacity style={styles.toggleRow} onPress={() => setRemoveBg(!removeBg)}>
-              <View style={styles.toggleInfo}>
-                <Ionicons name="cut-outline" size={18} color={Colors.primary} />
-                <View>
-                  <Text style={styles.toggleLabel}>Remove Background</Text>
-                  <Text style={styles.toggleSub}>Creates transparent PNG for canvas overlay</Text>
-                </View>
+              {/* Dimensions */}
+              <Text style={styles.label}>Dimensions (cm)</Text>
+              <View style={styles.dimensionsRow}>
+                <TextInput
+                  style={[styles.input, styles.dimensionInput]}
+                  placeholder="Width"
+                  placeholderTextColor={Colors.textMuted}
+                  value={newWidth}
+                  onChangeText={setNewWidth}
+                  keyboardType="decimal-pad"
+                />
+                <TextInput
+                  style={[styles.input, styles.dimensionInput]}
+                  placeholder="Height"
+                  placeholderTextColor={Colors.textMuted}
+                  value={newHeight}
+                  onChangeText={setNewHeight}
+                  keyboardType="decimal-pad"
+                />
+                <TextInput
+                  style={[styles.input, styles.dimensionInput]}
+                  placeholder="Depth"
+                  placeholderTextColor={Colors.textMuted}
+                  value={newDepth}
+                  onChangeText={setNewDepth}
+                  keyboardType="decimal-pad"
+                />
               </View>
-              <View style={[styles.toggle, removeBg && styles.toggleActive]}>
-                <View style={[styles.toggleThumb, removeBg && styles.toggleThumbActive]} />
-              </View>
-            </TouchableOpacity>
 
-            {/* Category selector */}
-            <Text style={styles.label}>Category</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: Spacing.md }}>
-              <View style={{ flexDirection: 'row', gap: Spacing.xs }}>
-                {CATEGORIES.map((cat) => (
-                  <TouchableOpacity
-                    key={cat}
-                    style={[styles.filterChip, newCategory === cat && styles.filterChipActive]}
-                    onPress={() => setNewCategory(cat)}
-                  >
-                    <Text style={[styles.filterChipText, newCategory === cat && styles.filterChipTextActive]}>{cat}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </ScrollView>
-
-            <TouchableOpacity
-              style={[styles.createButton, uploading && { opacity: 0.6 }]}
-              onPress={handleAddAsset}
-              disabled={uploading}
-            >
-              {uploading ? (
-                <View style={styles.uploadingRow}>
-                  <ActivityIndicator color="#000" size="small" />
-                  <Text style={styles.uploadingText}>{uploadStatus || 'Processing...'}</Text>
+              {/* Background removal toggle */}
+              <TouchableOpacity style={styles.toggleRow} onPress={() => setRemoveBg(!removeBg)}>
+                <View style={styles.toggleInfo}>
+                  <Ionicons name="cut-outline" size={18} color={Colors.primary} />
+                  <View>
+                    <Text style={styles.toggleLabel}>Remove Background</Text>
+                    <Text style={styles.toggleSub}>Creates transparent PNG for canvas overlay</Text>
+                  </View>
                 </View>
-              ) : (
-                <Text style={styles.createButtonText}>
-                  {removeBg ? '✨ Add with Background Removed' : 'Add to Library'}
+                <View style={[styles.toggle, removeBg && styles.toggleActive]}>
+                  <View style={[styles.toggleThumb, removeBg && styles.toggleThumbActive]} />
+                </View>
+              </TouchableOpacity>
+
+              {/* Category selector */}
+              <Text style={styles.label}>Category</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: Spacing.md }}>
+                <View style={{ flexDirection: 'row', gap: Spacing.xs }}>
+                  {CATEGORIES.map((cat) => (
+                    <TouchableOpacity
+                      key={cat}
+                      style={[styles.filterChip, newCategory === cat && styles.filterChipActive]}
+                      onPress={() => setNewCategory(cat)}
+                    >
+                      <Text style={[styles.filterChipText, newCategory === cat && styles.filterChipTextActive]}>{cat}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+
+              <TouchableOpacity
+                style={[styles.createButton, uploading && { opacity: 0.6 }]}
+                onPress={handleAddAsset}
+                disabled={uploading}
+              >
+                {uploading ? (
+                  <View style={styles.uploadingRow}>
+                    <ActivityIndicator color="#000" size="small" />
+                    <Text style={styles.uploadingText}>{uploadStatus || 'Processing...'}</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.createButtonText}>
+                    {removeBg ? '✨ Add with Background Removed' : 'Add to Library'}
+                  </Text>
+                )}
+              </TouchableOpacity>
+
+              {removeBg && (
+                <Text style={styles.bgTip}>
+                  💡 Tip: Photograph props against a plain wall or floor for best results.
                 </Text>
               )}
-            </TouchableOpacity>
-
-            {removeBg && (
-              <Text style={styles.bgTip}>
-                💡 Tip: Photograph props against a plain wall or floor for best results.
-              </Text>
-            )}
-          </View>
+            </View>
+          </ScrollView>
         </KeyboardAvoidingView>
       </Modal>
     </View>
@@ -367,71 +441,68 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.md,
-    paddingTop: Spacing.xxl,
-    paddingBottom: Spacing.md,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: Spacing.md, paddingTop: Spacing.xxl, paddingBottom: Spacing.md,
   },
   title: { fontSize: Typography.fontSize2xl, fontWeight: Typography.fontWeightBold, color: Colors.textPrimary },
   addButton: {
-    backgroundColor: Colors.primary,
-    width: 36, height: 36,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: Colors.primary, width: 36, height: 36,
+    borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center',
   },
   filterRow: { maxHeight: 44 },
   filterContent: { paddingHorizontal: Spacing.md, gap: Spacing.xs, paddingBottom: Spacing.xs },
   filterChip: {
     paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
+    paddingVertical: 8,
     borderRadius: Radius.full,
     backgroundColor: Colors.surface,
     borderWidth: 1,
     borderColor: Colors.surfaceBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   filterChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  filterChipText: { color: Colors.textMuted, fontSize: Typography.fontSizeXs },
+  filterChipText: { 
+    color: Colors.textMuted, 
+    fontSize: Typography.fontSizeXs,
+    lineHeight: 16,
+  },
   filterChipTextActive: { color: '#000', fontWeight: Typography.fontWeightSemibold },
   grid: { padding: Spacing.md, paddingBottom: Spacing.xl },
   gridRow: { gap: Spacing.sm, marginBottom: Spacing.sm },
   card: {
-    flex: 1,
-    backgroundColor: Colors.surfaceElevated,
-    borderRadius: Radius.lg,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: Colors.surfaceBorder,
-    ...Shadows.card,
+    flex: 1, backgroundColor: Colors.surfaceElevated, borderRadius: Radius.lg,
+    overflow: 'hidden', borderWidth: 1, borderColor: Colors.surfaceBorder, ...Shadows.card,
   },
   cardImageContainer: { width: '100%', height: 140, backgroundColor: Colors.surface },
   cardImage: { width: '100%', height: '100%' },
   cardBody: { padding: Spacing.sm },
   cardName: { color: Colors.textPrimary, fontSize: Typography.fontSizeSm, fontWeight: Typography.fontWeightSemibold },
   cardCategory: { color: Colors.textMuted, fontSize: Typography.fontSizeXs, marginTop: 2, textTransform: 'capitalize' },
+  cardDimensions: { color: Colors.textMuted, fontSize: 10, marginTop: 2 },
+  locationRow: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 2 },
+  cardLocation: { color: Colors.textMuted, fontSize: 10, flex: 1 },
   empty: { alignItems: 'center', marginTop: Spacing.xxl, paddingHorizontal: Spacing.xl },
   emptyText: { color: Colors.textMuted, fontSize: Typography.fontSizeSm, marginTop: Spacing.md, textAlign: 'center', lineHeight: 22 },
+
+  // Detail modal
+  detailImage: { width: '100%', height: 200, borderRadius: Radius.lg, marginBottom: Spacing.md, backgroundColor: Colors.surface },
+  detailRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: Spacing.sm, borderBottomWidth: 1, borderBottomColor: Colors.surfaceBorder },
+  detailLabel: { color: Colors.textMuted, fontSize: Typography.fontSizeSm },
+  detailValue: { color: Colors.textPrimary, fontSize: Typography.fontSizeSm, fontWeight: Typography.fontWeightSemibold },
+
+  // Modal
   modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
+  modalScrollContent: { justifyContent: 'flex-end', flexGrow: 1 },
   modalSheet: {
-    backgroundColor: Colors.surfaceElevated,
-    borderTopLeftRadius: Radius.xl,
-    borderTopRightRadius: Radius.xl,
-    padding: Spacing.xl,
-    paddingBottom: Spacing.xxl,
-    maxHeight: '90%',
+    backgroundColor: Colors.surfaceElevated, borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl, padding: Spacing.xl, paddingBottom: Spacing.xxl,
   },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.md },
   modalTitle: { fontSize: Typography.fontSizeLg, fontWeight: Typography.fontWeightBold, color: Colors.textPrimary },
   photoPicker: {
-    height: 160,
-    borderRadius: Radius.lg,
-    overflow: 'hidden',
-    marginBottom: Spacing.xs,
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.surfaceBorder,
+    height: 160, borderRadius: Radius.lg, overflow: 'hidden', marginBottom: Spacing.xs,
+    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.surfaceBorder,
   },
   photoPreview: { width: '100%', height: '100%' },
   photoPlaceholder: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.sm },
@@ -440,26 +511,16 @@ const styles = StyleSheet.create({
   galleryLinkText: { color: Colors.primary, fontSize: Typography.fontSizeXs },
   label: { fontSize: Typography.fontSizeXs, color: Colors.textMuted, marginBottom: Spacing.xs, textTransform: 'uppercase', letterSpacing: 1 },
   input: {
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.surfaceBorder,
-    borderRadius: Radius.md,
-    color: Colors.textPrimary,
-    fontSize: Typography.fontSizeMd,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm + 4,
-    marginBottom: Spacing.md,
+    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.surfaceBorder,
+    borderRadius: Radius.md, color: Colors.textPrimary, fontSize: Typography.fontSizeMd,
+    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm + 4, marginBottom: Spacing.md,
   },
+  dimensionsRow: { flexDirection: 'row', gap: Spacing.sm },
+  dimensionInput: { flex: 1 },
   toggleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.md,
-    padding: Spacing.md,
-    marginBottom: Spacing.md,
-    borderWidth: 1,
-    borderColor: Colors.surfaceBorder,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: Colors.surface, borderRadius: Radius.md, padding: Spacing.md,
+    marginBottom: Spacing.md, borderWidth: 1, borderColor: Colors.surfaceBorder,
   },
   toggleInfo: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, flex: 1 },
   toggleLabel: { color: Colors.textPrimary, fontSize: Typography.fontSizeSm, fontWeight: Typography.fontWeightSemibold },
@@ -469,13 +530,8 @@ const styles = StyleSheet.create({
   toggleThumb: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#fff' },
   toggleThumbActive: { alignSelf: 'flex-end' },
   createButton: {
-    backgroundColor: Colors.primary,
-    borderRadius: Radius.md,
-    paddingVertical: Spacing.sm + 4,
-    alignItems: 'center',
-    marginTop: Spacing.sm,
-    minHeight: 48,
-    justifyContent: 'center',
+    backgroundColor: Colors.primary, borderRadius: Radius.md, paddingVertical: Spacing.sm + 4,
+    alignItems: 'center', marginTop: Spacing.sm, minHeight: 48, justifyContent: 'center',
   },
   createButtonText: { color: '#000', fontSize: Typography.fontSizeMd, fontWeight: Typography.fontWeightBold },
   uploadingRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
