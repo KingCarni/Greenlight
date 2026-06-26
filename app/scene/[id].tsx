@@ -50,6 +50,10 @@ const DraggableAsset = React.memo(function DraggableAsset({
   onRemove: () => void;
   onFlip: () => void;
 }) {
+  if (!placed?.asset?.image_url) {
+    return null;
+  }
+
   return (
     <Animated.View
       style={[
@@ -173,24 +177,33 @@ export default function SceneCanvasScreen() {
     }
 
     if (data && data.length > 0) {
-      const loaded = data.map((row: any) => {
-        const x = (row.pos_x / 100) * layout.width;
-        const y = (row.pos_y / 100) * layout.height;
-        const selectRef = { current: () => {} };
-        const placed = buildPlacedAsset(
-          row.assets,
-          x,
-          y,
-          row.scale ?? 1,
-          row.rotation ?? 0,
-          row.flip_x ?? false,
-          selectRef,
-          row.id
-        );
-        selectRef.current = () => setSelectedId(prev => prev === placed.id ? null : placed.id);
-        return placed;
-      });
+      const loaded = data
+        .filter((row: any) => row.assets && row.assets.image_url)
+        .map((row: any) => {
+          const x = (row.pos_x / 100) * layout.width;
+          const y = (row.pos_y / 100) * layout.height;
+          const selectRef = { current: () => {} };
+          const placed = buildPlacedAsset(
+            row.assets,
+            x,
+            y,
+            row.scale ?? 1,
+            row.rotation ?? 0,
+            row.flip_x ?? false,
+            selectRef,
+            row.id
+          );
+          selectRef.current = () => setSelectedId(prev => prev === placed.id ? null : placed.id);
+          return placed;
+        });
+
       setPlacedAssets(loaded);
+      if (selectedId && !loaded.some((asset) => asset.id === selectedId)) {
+        setSelectedId(null);
+      }
+    } else {
+      setPlacedAssets([]);
+      setSelectedId(null);
     }
   }
 
@@ -376,17 +389,19 @@ export default function SceneCanvasScreen() {
 
     try {
       const layout = canvasLayoutRef.current;
-      const toInsert = placedAssets.map((p, index) => ({
-        scene_id: scene.id,
-        asset_id: p.asset.id,
-        pos_x: ((p.pan.x as any)._value / layout.width) * 100,
-        pos_y: ((p.pan.y as any)._value / layout.height) * 100,
-        scale: p.scaleRef.value,
-        rotation: p.rotationRef.value,
-        flip_x: p.flipXRef.value,
-        opacity: 1,
-        z_index: index,
-      }));
+      const toInsert = placedAssets
+        .filter((p) => p.asset?.id)
+        .map((p, index) => ({
+          scene_id: scene.id,
+          asset_id: p.asset.id,
+          pos_x: ((p.pan.x as any)._value / layout.width) * 100,
+          pos_y: ((p.pan.y as any)._value / layout.height) * 100,
+          scale: p.scaleRef.value,
+          rotation: p.rotationRef.value,
+          flip_x: p.flipXRef.value,
+          opacity: 1,
+          z_index: index,
+        }));
 
       await supabase.from('scene_assets').delete().eq('scene_id', scene.id);
 

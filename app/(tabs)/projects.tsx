@@ -26,6 +26,7 @@ export default function ProjectsScreen() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // New project form state
   const [newTitle, setNewTitle] = useState('');
@@ -68,12 +69,12 @@ export default function ProjectsScreen() {
 
     // Insert project
     const { data: project, error: projectError } = await supabase
-  .from('projects')
-  .insert({
-    name: newTitle.trim(),  // ✅ already correct
-    description: newDescription.trim() || null,
-    owner_id: user.id,
-  })
+      .from('projects')
+      .insert({
+        name: newTitle.trim(),
+        description: newDescription.trim() || null,
+        owner_id: user.id,
+      })
       .select()
       .single();
 
@@ -108,6 +109,76 @@ export default function ProjectsScreen() {
     fetchProjects();
   }
 
+  async function deleteProjectRecords(projectId: string) {
+    const { data: sceneRows, error: scenesFetchError } = await supabase
+      .from('scenes')
+      .select('id')
+      .eq('project_id', projectId);
+
+    if (scenesFetchError) throw scenesFetchError;
+
+    const sceneIds = (sceneRows ?? []).map((scene) => scene.id);
+
+    if (sceneIds.length > 0) {
+      const cleanupSteps = [
+        supabase.from('scene_assets').delete().in('scene_id', sceneIds),
+        supabase.from('annotations').delete().in('scene_id', sceneIds),
+        supabase.from('comments').delete().in('scene_id', sceneIds),
+        supabase.from('scene_snapshots').delete().in('scene_id', sceneIds),
+      ];
+
+      for (const step of cleanupSteps) {
+        const { error } = await step;
+        if (error) throw error;
+      }
+    }
+
+    const projectCleanupSteps = [
+      supabase.from('inventory').delete().eq('project_id', projectId),
+      supabase.from('scenes').delete().eq('project_id', projectId),
+      supabase.from('project_members').delete().eq('project_id', projectId),
+    ];
+
+    for (const step of projectCleanupSteps) {
+      const { error } = await step;
+      if (error) throw error;
+    }
+
+    const { error: projectDeleteError } = await supabase
+      .from('projects')
+      .delete()
+      .eq('id', projectId)
+      .eq('owner_id', user?.id);
+
+    if (projectDeleteError) throw projectDeleteError;
+  }
+
+  function confirmDeleteProject(project: Project) {
+    Alert.alert(
+      'Delete production?',
+      `Delete "${project.name}" and its scenes? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setDeletingId(project.id);
+              await deleteProjectRecords(project.id);
+              setProjects((prev) => prev.filter((item) => item.id !== project.id));
+            } catch (error: any) {
+              console.error('Error deleting project:', error?.message ?? error);
+              Alert.alert('Error', error?.message || 'Could not delete this production.');
+            } finally {
+              setDeletingId(null);
+            }
+          },
+        },
+      ]
+    );
+  }
+
   // ── Render ────────────────────────────────────────────────────
   return (
     <View style={styles.container}>
@@ -135,6 +206,7 @@ export default function ProjectsScreen() {
             <TouchableOpacity
               style={styles.card}
               onPress={() => router.push({ pathname: '/project/[id]', params: { id: item.id } })}
+              disabled={deletingId === item.id}
             >
               <View style={styles.cardThumbnail}>
                 <Ionicons name="film" size={32} color={Colors.primary} />
@@ -146,6 +218,18 @@ export default function ProjectsScreen() {
                 )}
                 <Text style={styles.cardStatus}>Active</Text>
               </View>
+              <TouchableOpacity
+                style={styles.deleteButton}
+                onPress={() => confirmDeleteProject(item)}
+                disabled={deletingId === item.id}
+                hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
+              >
+                {deletingId === item.id ? (
+                  <ActivityIndicator size="small" color="#ff6b6b" />
+                ) : (
+                  <Ionicons name="trash-outline" size={18} color="#ff6b6b" />
+                )}
+              </TouchableOpacity>
               <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
             </TouchableOpacity>
           )}
@@ -263,6 +347,14 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: Typography.fontSizeMd, fontWeight: Typography.fontWeightSemibold, color: Colors.textPrimary },
   cardGenre: { fontSize: Typography.fontSizeXs, color: Colors.textMuted, marginTop: 2 },
   cardStatus: { fontSize: Typography.fontSizeXs, color: Colors.primary, marginTop: 4 },
+  deleteButton: {
+    width: 36,
+    height: 36,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: Spacing.xs,
+  },
   empty: { alignItems: 'center', marginTop: Spacing.xxl, paddingHorizontal: Spacing.xl },
   emptyText: { color: Colors.textMuted, fontSize: Typography.fontSizeSm, marginTop: Spacing.md, textAlign: 'center', lineHeight: 22 },
 
