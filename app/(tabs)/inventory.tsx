@@ -52,7 +52,7 @@ interface InventoryItem {
     name: string;
     category: string;
     image_url: string;
-  };
+  } | null;
 }
 
 export default function InventoryScreen() {
@@ -64,6 +64,8 @@ export default function InventoryScreen() {
   const [statusFilter, setStatusFilter] = useState<Status | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [editItem, setEditItem] = useState<InventoryItem | null>(null);
+  const [locationPickerVisible, setLocationPickerVisible] = useState(false);
+  const [existingLocations, setExistingLocations] = useState<string[]>([]);
 
   // Form state
   const [formLocation, setFormLocation] = useState('');
@@ -92,8 +94,22 @@ export default function InventoryScreen() {
       .order('created_at', { ascending: false });
     if (data && data.length > 0) {
       setProjects(data as Project[]);
-      setSelectedProject(data[0].id);
+      setSelectedProject((current) => current ?? data[0].id);
     }
+  }
+
+  function deriveLocations(items: InventoryItem[]) {
+    const unique = new Map<string, string>();
+
+    items.forEach((item) => {
+      const rawLocation = item.warehouse_location?.trim();
+      if (!rawLocation) return;
+
+      const key = rawLocation.toLowerCase().replace(/\s+/g, ' ');
+      if (!unique.has(key)) unique.set(key, rawLocation);
+    });
+
+    return Array.from(unique.values()).sort((a, b) => a.localeCompare(b));
   }
 
   async function fetchInventory() {
@@ -111,8 +127,13 @@ export default function InventoryScreen() {
     }
 
     const { data, error } = await query;
-    if (error) console.error('Error fetching inventory:', error.message);
-    else setInventory(data as InventoryItem[]);
+    if (error) {
+      console.error('Error fetching inventory:', error.message);
+    } else {
+      const rows = (data ?? []) as InventoryItem[];
+      setInventory(rows);
+      setExistingLocations(deriveLocations(rows));
+    }
     setLoading(false);
   }
 
@@ -149,6 +170,20 @@ export default function InventoryScreen() {
     setModalVisible(true);
   }
 
+  function normalizeLocation(value: string) {
+    return value.trim().replace(/\s+/g, ' ');
+  }
+
+  function handleSelectLocation(location: string) {
+    setFormLocation(location);
+    setLocationPickerVisible(false);
+  }
+
+  function handleClearLocation() {
+    setFormLocation('');
+    setLocationPickerVisible(false);
+  }
+
   async function handleSave() {
     if (!selectedProject || !user) return;
     if (!editItem && !selectedAssetId) {
@@ -156,12 +191,14 @@ export default function InventoryScreen() {
       return;
     }
 
+    const normalizedLocation = normalizeLocation(formLocation);
+
     setSaving(true);
     try {
       const payload = {
         project_id: selectedProject,
         asset_id: editItem ? editItem.asset_id : selectedAssetId!,
-        warehouse_location: formLocation.trim() || null,
+        warehouse_location: normalizedLocation || null,
         quantity: parseInt(formQuantity) || 1,
         status: formStatus,
         notes: formNotes.trim() || null,
@@ -181,6 +218,14 @@ export default function InventoryScreen() {
         if (error) throw error;
       }
 
+      if (normalizedLocation) {
+        setExistingLocations((prev) => {
+          const existing = new Map(prev.map((loc) => [loc.toLowerCase(), loc]));
+          existing.set(normalizedLocation.toLowerCase(), normalizedLocation);
+          return Array.from(existing.values()).sort((a, b) => a.localeCompare(b));
+        });
+      }
+
       setModalVisible(false);
       fetchInventory();
     } catch (e: any) {
@@ -191,7 +236,7 @@ export default function InventoryScreen() {
   }
 
   async function handleDelete(item: InventoryItem) {
-    Alert.alert('Remove from inventory?', `Remove ${item.assets.name}?`, [
+    Alert.alert('Remove from inventory?', `Remove ${item.assets?.name ?? 'this item'}?`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Remove', style: 'destructive', onPress: async () => {
@@ -281,8 +326,8 @@ export default function InventoryScreen() {
               <View style={styles.cardLeft}>
                 <View style={[styles.statusDot, { backgroundColor: STATUS_COLORS[item.status] }]} />
                 <View style={styles.cardBody}>
-                  <Text style={styles.cardName}>{item.assets.name}</Text>
-                  <Text style={styles.cardCategory}>{item.assets.category}</Text>
+                  <Text style={styles.cardName}>{item.assets?.name ?? 'Unknown asset'}</Text>
+                  <Text style={styles.cardCategory}>{item.assets?.category ?? 'uncategorized'}</Text>
                   {item.warehouse_location && (
                     <View style={styles.locationRow}>
                       <Ionicons name="location-outline" size={12} color={Colors.textMuted} />
@@ -370,14 +415,24 @@ export default function InventoryScreen() {
             {editItem && (
               <View style={styles.editAssetLabel}>
                 <Ionicons name="cube-outline" size={18} color={Colors.primary} />
-                <Text style={styles.editAssetName}>{editItem.assets.name}</Text>
+                <Text style={styles.editAssetName}>{editItem.assets?.name ?? 'Unknown asset'}</Text>
               </View>
             )}
 
-            <Text style={styles.label}>Warehouse Location</Text>
+            <Text style={styles.label}>Storage Location</Text>
+            <TouchableOpacity
+              style={styles.locationPicker}
+              onPress={() => setLocationPickerVisible(true)}
+            >
+              <Text style={formLocation ? styles.assetPickerSelected : styles.assetPickerPlaceholder} numberOfLines={1}>
+                {formLocation || 'Choose existing or add new location'}
+              </Text>
+              <Ionicons name="chevron-down" size={18} color={Colors.textMuted} />
+            </TouchableOpacity>
+
             <TextInput
               style={styles.input}
-              placeholder="e.g. Shelf B3, Unit 12, Truck 2"
+              placeholder="Custom location, e.g. Warehouse A / Shelf B3"
               placeholderTextColor={Colors.textMuted}
               value={formLocation}
               onChangeText={setFormLocation}
@@ -402,7 +457,7 @@ export default function InventoryScreen() {
                     style={[styles.statusChip, formStatus === s && { backgroundColor: STATUS_COLORS[s], borderColor: STATUS_COLORS[s] }]}
                     onPress={() => setFormStatus(s)}
                   >
-                    <Text style={[styles.statusChipText, formStatus === s && { color: '#000' }]}>
+                    <Text style={[styles.statusChipText, formStatus === s && { color: '#000' }]}> 
                       {STATUS_LABELS[s]}
                     </Text>
                   </TouchableOpacity>
@@ -432,6 +487,84 @@ export default function InventoryScreen() {
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Location picker modal */}
+      <Modal visible={locationPickerVisible} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Storage Location</Text>
+              <TouchableOpacity onPress={() => setLocationPickerVisible(false)}>
+                <Ionicons name="close" size={24} color={Colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity style={styles.locationActionRow} onPress={handleClearLocation}>
+              <View style={styles.locationIconWrap}>
+                <Ionicons name="close" size={18} color={Colors.textMuted} />
+              </View>
+              <View style={styles.assetRowBody}>
+                <Text style={styles.assetRowName}>No location</Text>
+                <Text style={styles.assetRowCategory}>Leave this item unassigned</Text>
+              </View>
+            </TouchableOpacity>
+
+            <View style={styles.locationActionRow}>
+              <View style={styles.locationIconWrap}>
+                <Ionicons name="create-outline" size={18} color={Colors.primary} />
+              </View>
+              <View style={styles.assetRowBody}>
+                <Text style={styles.assetRowName}>Custom / New Location</Text>
+                <TextInput
+                  style={styles.inlineLocationInput}
+                  placeholder="Type new warehouse, shelf, truck, or set location"
+                  placeholderTextColor={Colors.textMuted}
+                  value={formLocation}
+                  onChangeText={setFormLocation}
+                  autoCapitalize="words"
+                />
+              </View>
+            </View>
+
+            {existingLocations.length > 0 ? (
+              <FlatList
+                data={existingLocations}
+                keyExtractor={(item) => item.toLowerCase()}
+                keyboardShouldPersistTaps="handled"
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={[styles.assetRow, formLocation === item && styles.assetRowSelected]}
+                    onPress={() => handleSelectLocation(item)}
+                  >
+                    <View style={styles.assetRowBody}>
+                      <Text style={styles.assetRowName}>{item}</Text>
+                      <Text style={styles.assetRowCategory}>Existing production location</Text>
+                    </View>
+                    {formLocation === item && (
+                      <Ionicons name="checkmark" size={18} color={Colors.primary} />
+                    )}
+                  </TouchableOpacity>
+                )}
+              />
+            ) : (
+              <View style={styles.locationEmpty}>
+                <Ionicons name="location-outline" size={32} color={Colors.textMuted} />
+                <Text style={styles.emptyText}>No saved locations yet.{'\n'}Type one above and save this item to reuse it.</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.saveButton}
+              onPress={() => {
+                setFormLocation(normalizeLocation(formLocation));
+                setLocationPickerVisible(false);
+              }}
+            >
+              <Text style={styles.saveButtonText}>Use Location</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
 
       {/* Asset picker modal */}
@@ -544,8 +677,13 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.surfaceBorder,
     borderRadius: Radius.md, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm + 4, marginBottom: Spacing.md,
   },
+  locationPicker: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.surfaceBorder,
+    borderRadius: Radius.md, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm + 4, marginBottom: Spacing.sm,
+  },
   assetPickerPlaceholder: { color: Colors.textMuted, fontSize: Typography.fontSizeMd },
-  assetPickerSelected: { color: Colors.textPrimary, fontSize: Typography.fontSizeMd },
+  assetPickerSelected: { color: Colors.textPrimary, fontSize: Typography.fontSizeMd, flex: 1, marginRight: Spacing.sm },
   editAssetLabel: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.md },
   editAssetName: { fontSize: Typography.fontSizeMd, fontWeight: Typography.fontWeightSemibold, color: Colors.textPrimary },
   statusChip: {
@@ -565,5 +703,23 @@ const styles = StyleSheet.create({
   assetRowSelected: { borderWidth: 1, borderColor: Colors.primary },
   assetRowBody: { flex: 1 },
   assetRowName: { fontSize: Typography.fontSizeSm, fontWeight: Typography.fontWeightSemibold, color: Colors.textPrimary },
-  assetRowCategory: { fontSize: Typography.fontSizeXs, color: Colors.textMuted, textTransform: 'capitalize' },
+  assetRowCategory: { fontSize: Typography.fontSizeXs, color: Colors.textMuted, textTransform: 'capitalize', marginTop: 2 },
+  locationActionRow: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+    padding: Spacing.md, borderRadius: Radius.md, marginBottom: Spacing.sm,
+    backgroundColor: Colors.surface,
+  },
+  locationIconWrap: {
+    width: 32, height: 32, borderRadius: 16,
+    alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.surfaceElevated,
+  },
+  inlineLocationInput: {
+    color: Colors.textPrimary,
+    fontSize: Typography.fontSizeSm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.surfaceBorder,
+    paddingVertical: 6,
+    marginTop: 4,
+  },
+  locationEmpty: { alignItems: 'center', padding: Spacing.xl },
 });
