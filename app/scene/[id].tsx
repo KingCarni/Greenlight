@@ -32,8 +32,10 @@ interface PlacedAsset {
   pan: Animated.ValueXY;
   scaleAnim: Animated.Value;
   rotationAnim: Animated.Value;
+  flipXAnim: Animated.Value;
   scaleRef: { value: number };
   rotationRef: { value: number };
+  flipXRef: { value: boolean };
   panResponder: any;
 }
 
@@ -41,10 +43,12 @@ const DraggableAsset = React.memo(function DraggableAsset({
   placed,
   isSelected,
   onRemove,
+  onFlip,
 }: {
   placed: PlacedAsset;
   isSelected: boolean;
   onRemove: () => void;
+  onFlip: () => void;
 }) {
   return (
     <Animated.View
@@ -54,6 +58,7 @@ const DraggableAsset = React.memo(function DraggableAsset({
           transform: [
             ...placed.pan.getTranslateTransform(),
             { scale: placed.scaleAnim },
+            { scaleX: placed.flipXAnim },
             {
               rotate: placed.rotationAnim.interpolate({
                 inputRange: [-720, 720],
@@ -69,19 +74,32 @@ const DraggableAsset = React.memo(function DraggableAsset({
         style={styles.placedAssetImage}
         resizeMode="contain"
       />
+
       {isSelected && <View style={styles.selectionBorder} />}
+
       <View
         style={[StyleSheet.absoluteFill, { zIndex: 1 }]}
         {...placed.panResponder.panHandlers}
       />
+
       {isSelected && (
-        <TouchableOpacity
-          style={styles.removeBtn}
-          onPress={onRemove}
-          hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
-        >
-          <Ionicons name="close-circle" size={28} color="#ff3b30" />
-        </TouchableOpacity>
+        <>
+          <TouchableOpacity
+            style={styles.flipBtn}
+            onPress={onFlip}
+            hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
+          >
+            <Ionicons name="swap-horizontal" size={22} color="#000" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.removeBtn}
+            onPress={onRemove}
+            hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
+          >
+            <Ionicons name="close-circle" size={28} color="#ff3b30" />
+          </TouchableOpacity>
+        </>
       )}
     </Animated.View>
   );
@@ -103,6 +121,9 @@ export default function SceneCanvasScreen() {
 
   const canvasLayoutRef = useRef({ width: 0, height: 0, x: 0, y: 0 });
   const bottomSafePadding = Math.max(insets.bottom + Spacing.sm, Spacing.xl);
+  const trayHeight = 112 + bottomSafePadding;
+  const collapsedControlBottom = 24 + bottomSafePadding;
+  const expandedControlBottom = trayHeight + Spacing.md;
 
   useEffect(() => {
     fetchScene();
@@ -156,7 +177,16 @@ export default function SceneCanvasScreen() {
         const x = (row.pos_x / 100) * layout.width;
         const y = (row.pos_y / 100) * layout.height;
         const selectRef = { current: () => {} };
-        const placed = buildPlacedAsset(row.assets, x, y, row.scale ?? 1, row.rotation ?? 0, selectRef, row.id);
+        const placed = buildPlacedAsset(
+          row.assets,
+          x,
+          y,
+          row.scale ?? 1,
+          row.rotation ?? 0,
+          row.flip_x ?? false,
+          selectRef,
+          row.id
+        );
         selectRef.current = () => setSelectedId(prev => prev === placed.id ? null : placed.id);
         return placed;
       });
@@ -170,6 +200,7 @@ export default function SceneCanvasScreen() {
     startY?: number,
     startScale = 1,
     startRotation = 0,
+    startFlipX = false,
     onSelectRef?: { current: () => void },
     stableId?: string,
   ): PlacedAsset {
@@ -180,8 +211,10 @@ export default function SceneCanvasScreen() {
     });
     const scaleAnim = new Animated.Value(startScale);
     const rotationAnim = new Animated.Value(startRotation);
+    const flipXAnim = new Animated.Value(startFlipX ? -1 : 1);
     const scaleRef = { value: startScale };
     const rotationRef = { value: startRotation };
+    const flipXRef = { value: startFlipX };
 
     let prevDist = 0;
     let prevAngle = 0;
@@ -288,19 +321,39 @@ export default function SceneCanvasScreen() {
       pan,
       scaleAnim,
       rotationAnim,
+      flipXAnim,
       scaleRef,
       rotationRef,
+      flipXRef,
       panResponder,
     };
   }
 
   function handleAddAssetToCanvas(asset: Asset) {
     const selectRef = { current: () => {} };
-    const placed = buildPlacedAsset(asset, undefined, undefined, 1, 0, selectRef);
+    const placed = buildPlacedAsset(asset, undefined, undefined, 1, 0, false, selectRef);
     selectRef.current = () => setSelectedId(prev => prev === placed.id ? null : placed.id);
     setPlacedAssets(prev => [...prev, placed]);
     setSelectedId(placed.id);
     setAssetModalVisible(false);
+  }
+
+  function handleFlip(placedId: string) {
+    setPlacedAssets(prev => prev.map(placed => {
+      if (placed.id !== placedId) return placed;
+
+      const nextValue = !placed.flipXRef.value;
+      placed.flipXRef.value = nextValue;
+
+      Animated.spring(placed.flipXAnim, {
+        toValue: nextValue ? -1 : 1,
+        useNativeDriver: true,
+        friction: 7,
+        tension: 80,
+      }).start();
+
+      return placed;
+    }));
   }
 
   function handleRemove(placedId: string) {
@@ -330,6 +383,7 @@ export default function SceneCanvasScreen() {
         pos_y: ((p.pan.y as any)._value / layout.height) * 100,
         scale: p.scaleRef.value,
         rotation: p.rotationRef.value,
+        flip_x: p.flipXRef.value,
         opacity: 1,
         z_index: index,
       }));
@@ -388,6 +442,7 @@ export default function SceneCanvasScreen() {
             placed={placed}
             isSelected={selectedId === placed.id}
             onRemove={() => handleRemove(placed.id)}
+            onFlip={() => handleFlip(placed.id)}
           />
         ))}
 
@@ -418,14 +473,14 @@ export default function SceneCanvasScreen() {
         </SafeAreaView>
 
         <TouchableOpacity
-          style={[styles.fab, { bottom: trayExpanded ? 112 + bottomSafePadding : 24 + bottomSafePadding }]}
+          style={[styles.fab, { bottom: trayExpanded ? expandedControlBottom : collapsedControlBottom }]}
           onPress={() => setAssetModalVisible(true)}
         >
           <Ionicons name="add" size={28} color="#000" />
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.trayToggle, { bottom: trayExpanded ? 112 + bottomSafePadding : 24 + bottomSafePadding }]}
+          style={[styles.trayToggle, { bottom: trayExpanded ? expandedControlBottom : collapsedControlBottom }]}
           onPress={() => setTrayExpanded(prev => !prev)}
         >
           <Ionicons
@@ -440,7 +495,7 @@ export default function SceneCanvasScreen() {
       </View>
 
       {trayExpanded && (
-        <SafeAreaView style={[styles.tray, { paddingBottom: bottomSafePadding }]}>
+        <View style={[styles.trayOverlay, { paddingBottom: bottomSafePadding }]}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             <View style={styles.trayRow}>
               {assets.slice(0, 10).map((asset) => (
@@ -461,7 +516,7 @@ export default function SceneCanvasScreen() {
               </TouchableOpacity>
             </View>
           </ScrollView>
-        </SafeAreaView>
+        </View>
       )}
 
       <Modal visible={assetModalVisible} animationType="slide" transparent>
@@ -598,6 +653,18 @@ const styles = StyleSheet.create({
     borderColor: Colors.primary,
     borderRadius: 4,
   },
+  flipBtn: {
+    position: 'absolute',
+    top: -14,
+    left: -14,
+    width: 28,
+    height: 28,
+    backgroundColor: Colors.primary,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
+  },
   removeBtn: {
     position: 'absolute',
     top: -14,
@@ -607,10 +674,15 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
 
-  tray: {
+  trayOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: Colors.surfaceElevated,
     borderTopWidth: 1,
     borderTopColor: Colors.surfaceBorder,
+    zIndex: 20,
   },
   trayRow: {
     flexDirection: 'row',

@@ -42,6 +42,7 @@ export default function ProjectDetailScreen() {
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
+  const [deletingSceneId, setDeletingSceneId] = useState<string | null>(null);
 
   // New scene form
   const [sceneName, setSceneName] = useState('');
@@ -49,14 +50,14 @@ export default function ProjectDetailScreen() {
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
-  fetchProject();
-}, [id]);
+    fetchProject();
+  }, [id]);
 
-useFocusEffect(
-  useCallback(() => {
-    fetchScenes();
-  }, [id])
-);
+  useFocusEffect(
+    useCallback(() => {
+      fetchScenes();
+    }, [id])
+  );
 
   async function fetchProject() {
     const { data } = await supabase
@@ -155,6 +156,54 @@ useFocusEffect(
     }
   }
 
+  async function deleteSceneRecords(sceneId: string) {
+    const cleanupSteps = [
+      supabase.from('scene_assets').delete().eq('scene_id', sceneId),
+      supabase.from('annotations').delete().eq('scene_id', sceneId),
+      supabase.from('comments').delete().eq('scene_id', sceneId),
+      supabase.from('scene_snapshots').delete().eq('scene_id', sceneId),
+    ];
+
+    for (const step of cleanupSteps) {
+      const { error } = await step;
+      if (error) throw error;
+    }
+
+    const { error } = await supabase
+      .from('scenes')
+      .delete()
+      .eq('id', sceneId)
+      .eq('project_id', id);
+
+    if (error) throw error;
+  }
+
+  function confirmDeleteScene(scene: Scene) {
+    Alert.alert(
+      'Delete scene?',
+      `Delete "${scene.name}" and its placed assets? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setDeletingSceneId(scene.id);
+              await deleteSceneRecords(scene.id);
+              setScenes((prev) => prev.filter((item) => item.id !== scene.id));
+            } catch (error: any) {
+              console.error('Error deleting scene:', error?.message ?? error);
+              Alert.alert('Error', error?.message || 'Could not delete this scene.');
+            } finally {
+              setDeletingSceneId(null);
+            }
+          },
+        },
+      ]
+    );
+  }
+
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -190,6 +239,7 @@ useFocusEffect(
             <TouchableOpacity
               style={styles.card}
               onPress={() => router.push({ pathname: '/scene/[id]', params: { id: item.id } })}
+              disabled={deletingSceneId === item.id}
             >
               <View style={styles.sceneNumber}>
                 <Text style={styles.sceneNumberText}>{index + 1}</Text>
@@ -203,6 +253,18 @@ useFocusEffect(
               {item.canvas_photo_url && (
                 <Ionicons name="image-outline" size={16} color={Colors.primary} style={{ marginRight: Spacing.xs }} />
               )}
+              <TouchableOpacity
+                style={styles.deleteButton}
+                onPress={() => confirmDeleteScene(item)}
+                disabled={deletingSceneId === item.id}
+                hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
+              >
+                {deletingSceneId === item.id ? (
+                  <ActivityIndicator size="small" color="#ff6b6b" />
+                ) : (
+                  <Ionicons name="trash-outline" size={18} color="#ff6b6b" />
+                )}
+              </TouchableOpacity>
               <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
             </TouchableOpacity>
           )}
@@ -330,6 +392,14 @@ const styles = StyleSheet.create({
   cardBody: { flex: 1 },
   cardTitle: { fontSize: Typography.fontSizeSm, fontWeight: Typography.fontWeightSemibold, color: Colors.textPrimary },
   cardStatus: { fontSize: Typography.fontSizeXs, marginTop: 2, textTransform: 'capitalize' },
+  deleteButton: {
+    width: 36,
+    height: 36,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: Spacing.xs,
+  },
   empty: { alignItems: 'center', marginTop: Spacing.xxl, paddingHorizontal: Spacing.xl },
   emptyText: { color: Colors.textMuted, fontSize: Typography.fontSizeSm, marginTop: Spacing.md, textAlign: 'center', lineHeight: 22 },
 
@@ -363,27 +433,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.xs,
-    padding: Spacing.sm,
-    borderRadius: Radius.md,
+    backgroundColor: Colors.surface,
     borderWidth: 1,
-    borderColor: Colors.primary,
+    borderColor: Colors.surfaceBorder,
+    borderRadius: Radius.md,
+    paddingVertical: Spacing.md,
   },
-  photoButtonText: { color: Colors.primary, fontSize: Typography.fontSizeSm },
+  photoButtonText: { color: Colors.textSecondary, fontSize: Typography.fontSizeSm },
   photoConfirm: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.xs,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.md,
+    padding: Spacing.sm,
     marginBottom: Spacing.md,
   },
-  photoConfirmText: { flex: 1, color: '#4CAF50', fontSize: Typography.fontSizeSm },
+  photoConfirmText: { flex: 1, color: Colors.textSecondary, fontSize: Typography.fontSizeSm },
   createButton: {
     backgroundColor: Colors.primary,
     borderRadius: Radius.md,
     paddingVertical: Spacing.sm + 4,
     alignItems: 'center',
     marginTop: Spacing.sm,
-    minHeight: 48,
-    justifyContent: 'center',
   },
   createButtonText: { color: '#000', fontSize: Typography.fontSizeMd, fontWeight: Typography.fontWeightBold },
 });
