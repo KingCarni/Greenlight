@@ -5,6 +5,7 @@ import {
   PanResponder, Animated, Alert, Modal, FlatList
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { Colors, Spacing, Typography, Radius } from '@/constants/theme';
@@ -95,6 +96,7 @@ const DraggableAsset = React.memo(function DraggableAsset({
 export default function SceneCanvasScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [scene, setScene] = useState<Scene | null>(null);
   const [loading, setLoading] = useState(true);
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -103,6 +105,7 @@ export default function SceneCanvasScreen() {
   const [assetModalVisible, setAssetModalVisible] = useState(false);
   const [saving, setSaving] = useState(false);
   const canvasLayoutRef = useRef({ width: 0, height: 0, x: 0, y: 0 });
+  const bottomSafePadding = Math.max(insets.bottom + Spacing.sm, Spacing.xl);
 
   useEffect(() => { fetchScene(); fetchAssets(); }, [id]);
 
@@ -358,7 +361,7 @@ export default function SceneCanvasScreen() {
         </TouchableOpacity>
       </View>
 
-      <View style={styles.tray}>
+      <View style={[styles.tray, { paddingBottom: bottomSafePadding }]}>
         <Text style={styles.trayLabel}>Quick Add</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <View style={styles.trayRow}>
@@ -378,7 +381,7 @@ export default function SceneCanvasScreen() {
 
       <Modal visible={assetModalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalSheet}>
+          <View style={[styles.modalSheet, { paddingBottom: bottomSafePadding }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Choose Asset</Text>
               <TouchableOpacity onPress={() => setAssetModalVisible(false)}>
@@ -394,6 +397,7 @@ export default function SceneCanvasScreen() {
                 data={assets}
                 keyExtractor={(item) => item.id}
                 numColumns={3}
+                contentContainerStyle={{ paddingBottom: Spacing.md }}
                 renderItem={({ item }) => (
                   <TouchableOpacity style={styles.modalAssetItem} onPress={() => handleAddAssetToCanvas(item)}>
                     <Image source={{ uri: item.image_url }} style={styles.modalAssetImage} resizeMode="cover" />
@@ -449,7 +453,8 @@ const styles = StyleSheet.create({
   },
   tray: {
     backgroundColor: Colors.surfaceElevated, borderTopWidth: 1,
-    borderTopColor: Colors.surfaceBorder, padding: Spacing.md, paddingBottom: Spacing.xl,
+    borderTopColor: Colors.surfaceBorder, paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.md,
   },
   trayLabel: {
     fontSize: Typography.fontSizeXs, color: Colors.textMuted,
@@ -463,7 +468,8 @@ const styles = StyleSheet.create({
   modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
   modalSheet: {
     backgroundColor: Colors.surfaceElevated, borderTopLeftRadius: Radius.xl,
-    borderTopRightRadius: Radius.xl, padding: Spacing.xl, maxHeight: '70%',
+    borderTopRightRadius: Radius.xl, paddingHorizontal: Spacing.xl,
+    paddingTop: Spacing.xl, maxHeight: '70%',
   },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.md },
   modalTitle: { fontSize: Typography.fontSizeLg, fontWeight: Typography.fontWeightBold, color: Colors.textPrimary },
