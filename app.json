@@ -20,9 +20,8 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0a0a0a"
       },
-      "package": "com.greenlight.app",
-      "usesCleartextTraffic": true
-    },
+      "package": "com.greenlight.app"
+          },
     "web": {
       "favicon": "./assets/favicon.png",
       "bundler": "metro"
@@ -34,6 +33,12 @@
     "scheme": "greenlight",
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "0d3f5127-be8c-4b16-ad38-d7b8a359528e"
+      }
     }
   }
 }

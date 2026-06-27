@@ -131,7 +131,6 @@ export default function SceneCanvasScreen() {
 
   useEffect(() => {
     fetchScene();
-    fetchAssets();
   }, [id]);
 
   async function fetchScene() {
@@ -141,16 +140,23 @@ export default function SceneCanvasScreen() {
       .eq('id', id)
       .single();
 
-    if (error) console.error('Error fetching scene:', error.message);
-    else setScene(data as Scene);
+    if (error) {
+      console.error('Error fetching scene:', error.message);
+    } else {
+      const sceneData = data as Scene;
+      setScene(sceneData);
+      // Now that we have the project_id, fetch only this project's assets
+      await fetchAssets(sceneData.project_id);
+    }
 
     setLoading(false);
   }
 
-  async function fetchAssets() {
+  async function fetchAssets(projectId: string) {
     const { data, error } = await supabase
       .from('assets')
       .select('id, name, category, image_url')
+      .eq('project_id', projectId)
       .order('created_at', { ascending: false });
 
     if (error) {

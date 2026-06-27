@@ -1,9 +1,11 @@
 import { useEffect } from 'react';
+import { View, ActivityIndicator } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { useRouter, useSegments } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { Colors } from '@/constants/theme';
 
 function RootNavigator() {
   const { session, loading } = useAuth();
@@ -11,21 +13,30 @@ function RootNavigator() {
   const router = useRouter();
 
   useEffect(() => {
-  if (loading) return;
+    if (loading) return;
 
-  const inAuthGroup = segments[0] === '(auth)';
+    const inAuthGroup = segments[0] === '(auth)';
 
-  if (!session && !inAuthGroup) {
-    router.replace('/(auth)/login');
-  } else if (session && inAuthGroup) {
-    router.replace('/(tabs)/projects');
+    if (!session && !inAuthGroup) {
+      router.replace('/(auth)/login');
+    } else if (session && inAuthGroup) {
+      router.replace('/(tabs)/projects');
+    }
+  }, [session, loading]);
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: Colors.background, alignItems: 'center', justifyContent: 'center' }}>
+        <ActivityIndicator size="large" color={Colors.primary} />
+      </View>
+    );
   }
-}, [session, loading]); // ← remove segments from deps
 
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="(auth)" />
       <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="index" redirect />
     </Stack>
   );
 }
