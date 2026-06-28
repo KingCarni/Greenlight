@@ -1,13 +1,16 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
   ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
+  FlatList, ScrollView, RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { Colors, Spacing, Typography, Radius, Shadows } from '@/constants/theme';
+
+type TeamsTab = 'join' | 'chat';
 
 interface CodePreview {
   codeId: string;
@@ -16,18 +19,138 @@ interface CodePreview {
   role: string;
 }
 
+interface TeamProject {
+  id: string;
+  name: string;
+  role: string;
+}
+
+interface TeamMessage {
+  id: string;
+  project_id: string;
+  sender_id: string;
+  content: string;
+  created_at: string;
+  profiles?: { full_name: string | null }[] | { full_name: string | null } | null;
+}
+
 const ROLE_LABELS: Record<string, string> = {
   owner: 'Owner', editor: 'Editor', viewer: 'Viewer',
   set_decorator: 'Set Decorator', art_director: 'Art Director',
   prop_master: 'Props', producer: 'Producer',
 };
 
+const formatTime = (iso: string) =>
+  new Date(iso).toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' });
+
+const profileName = (message: TeamMessage) => {
+  const profile = Array.isArray(message.profiles) ? message.profiles[0] : message.profiles;
+  return profile?.full_name ?? 'Team Member';
+};
+
 export default function TeamsScreen() {
   const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState<TeamsTab>('join');
+
+  // Join production state
   const [code, setCode] = useState('');
   const [looking, setLooking] = useState(false);
   const [joining, setJoining] = useState(false);
   const [preview, setPreview] = useState<CodePreview | null>(null);
+
+  // Team chat state
+  const [teamProjects, setTeamProjects] = useState<TeamProject[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [messages, setMessages] = useState<TeamMessage[]>([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [sendingMessage, setSendingMessage] = useState(false);
+  const chatListRef = useRef<FlatList<TeamMessage>>(null);
+
+  const selectedProject = teamProjects.find((project) => project.id === selectedProjectId) ?? null;
+
+  const fetchTeamProjects = useCallback(async () => {
+    if (!user) return;
+    setProjectsLoading(true);
+    try {
+      const projectMap = new Map<string, TeamProject>();
+
+      const { data: ownedProjects, error: ownedError } = await supabase
+        .from('projects')
+        .select('id, name')
+        .eq('owner_id', user.id)
+        .order('created_at', { ascending: false });
+      if (ownedError) throw ownedError;
+
+      (ownedProjects ?? []).forEach((project: any) => {
+        projectMap.set(project.id, { id: project.id, name: project.name, role: 'owner' });
+      });
+
+      const { data: memberRows, error: memberError } = await supabase
+        .from('project_members')
+        .select('project_id, role, projects(id, name)')
+        .eq('user_id', user.id);
+      if (memberError) throw memberError;
+
+      (memberRows ?? []).forEach((row: any) => {
+        const project = Array.isArray(row.projects) ? row.projects[0] : row.projects;
+        if (!project?.id) return;
+        projectMap.set(project.id, {
+          id: project.id,
+          name: project.name ?? 'Production',
+          role: row.role ?? projectMap.get(project.id)?.role ?? 'viewer',
+        });
+      });
+
+      const rows = Array.from(projectMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+      setTeamProjects(rows);
+      setSelectedProjectId((current) => {
+        if (current && rows.some((project) => project.id === current)) return current;
+        return rows[0]?.id ?? null;
+      });
+    } catch (err: any) {
+      Alert.alert('Error loading teams', err.message ?? 'Could not load your productions.');
+    } finally {
+      setProjectsLoading(false);
+      setRefreshing(false);
+    }
+  }, [user]);
+
+  const fetchTeamMessages = useCallback(async (projectId: string) => {
+    setMessagesLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('team_messages')
+        .select('id, project_id, sender_id, content, created_at, profiles!team_messages_sender_id_fkey(full_name)')
+        .eq('project_id', projectId)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      setMessages((data ?? []) as TeamMessage[]);
+      setTimeout(() => chatListRef.current?.scrollToEnd({ animated: true }), 100);
+    } catch (err: any) {
+      Alert.alert('Error loading chat', err.message ?? 'Could not load team chat.');
+    } finally {
+      setMessagesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'chat') fetchTeamProjects();
+  }, [activeTab, fetchTeamProjects]);
+
+  useEffect(() => {
+    if (activeTab === 'chat' && selectedProjectId) fetchTeamMessages(selectedProjectId);
+    if (!selectedProjectId) setMessages([]);
+  }, [activeTab, selectedProjectId, fetchTeamMessages]);
+
+  const handleRefreshChat = async () => {
+    setRefreshing(true);
+    await fetchTeamProjects();
+    if (selectedProjectId) await fetchTeamMessages(selectedProjectId);
+    setRefreshing(false);
+  };
 
   const handleLookup = async () => {
     const trimmed = code.trim().toUpperCase();
@@ -35,7 +158,6 @@ export default function TeamsScreen() {
     setLooking(true);
     setPreview(null);
     try {
-      // Find the code
       const { data: codeData, error: codeError } = await supabase
         .from('project_join_codes')
         .select('id, project_id, role, is_active, expires_at, use_count, max_uses')
@@ -51,7 +173,6 @@ export default function TeamsScreen() {
         Alert.alert('Code used up', 'This join code has reached its maximum uses.'); return;
       }
 
-      // Check already a member
       const { data: existing } = await supabase
         .from('project_members')
         .select('user_id')
@@ -60,7 +181,6 @@ export default function TeamsScreen() {
         .single();
       if (existing) { Alert.alert('Already a member', "You're already on this production's team."); return; }
 
-      // Fetch project name. This may be hidden by RLS before joining, so handleJoin fetches it again after membership is created.
       const { data: projectData } = await supabase
         .from('projects')
         .select('name')
@@ -84,7 +204,6 @@ export default function TeamsScreen() {
     if (!preview || !user) return;
     setJoining(true);
     try {
-      // Add to project_members
       const { error: memberError } = await supabase.from('project_members').insert({
         project_id: preview.projectId,
         user_id: user.id,
@@ -93,7 +212,6 @@ export default function TeamsScreen() {
       });
       if (memberError) throw memberError;
 
-      // Once membership exists, RLS should allow the project name to be read.
       const { data: joinedProject } = await supabase
         .from('projects')
         .select('name')
@@ -101,7 +219,6 @@ export default function TeamsScreen() {
         .single();
       const joinedProjectName = joinedProject?.name ?? preview.projectName ?? 'Production';
 
-      // Increment use_count on the code
       await supabase
         .from('project_join_codes')
         .update({ use_count: (await supabase
@@ -114,7 +231,10 @@ export default function TeamsScreen() {
 
       setCode('');
       setPreview(null);
-      Alert.alert('Joined!', `You've joined "${joinedProjectName}" as ${ROLE_LABELS[preview.role] ?? preview.role}. Open the Scene Editor to see it.`);
+      setActiveTab('chat');
+      await fetchTeamProjects();
+      setSelectedProjectId(preview.projectId);
+      Alert.alert('Joined!', `You've joined "${joinedProjectName}" as ${ROLE_LABELS[preview.role] ?? preview.role}. Team Chat is ready.`);
     } catch (err: any) {
       Alert.alert('Error joining', err.message);
     } finally {
@@ -122,87 +242,209 @@ export default function TeamsScreen() {
     }
   };
 
+  const sendTeamMessage = async () => {
+    if (!newMessage.trim() || !selectedProjectId || !user) return;
+    setSendingMessage(true);
+    try {
+      const { error } = await supabase.from('team_messages').insert({
+        project_id: selectedProjectId,
+        sender_id: user.id,
+        content: newMessage.trim(),
+      });
+      if (error) throw error;
+      setNewMessage('');
+      await fetchTeamMessages(selectedProjectId);
+    } catch (err: any) {
+      Alert.alert('Error sending message', err.message ?? 'Could not send message.');
+    } finally {
+      setSendingMessage(false);
+    }
+  };
+
+  const renderJoinProduction = () => (
+    <View style={styles.joinPane}>
+      <View style={styles.iconWrap}>
+        <Ionicons name="people-outline" size={48} color={Colors.primary} />
+      </View>
+      <Text style={styles.heading}>Join a Production</Text>
+      <Text style={styles.sub}>
+        Enter a team code from your production owner to join their project.
+      </Text>
+
+      <View style={styles.inputRow}>
+        <TextInput
+          style={styles.codeInput}
+          value={code}
+          onChangeText={v => { setCode(v.toUpperCase()); setPreview(null); }}
+          placeholder="Enter team code"
+          placeholderTextColor={Colors.textMuted}
+          autoCapitalize="characters"
+          autoCorrect={false}
+          maxLength={12}
+        />
+        <TouchableOpacity
+          style={[styles.lookupBtn, (looking || code.trim().length < 6) && { opacity: 0.5 }]}
+          onPress={handleLookup}
+          disabled={looking || code.trim().length < 6}
+        >
+          {looking
+            ? <ActivityIndicator color="#000" size="small" />
+            : <Text style={styles.lookupBtnText}>Look Up</Text>}
+        </TouchableOpacity>
+      </View>
+
+      {preview && (
+        <View style={styles.previewCard}>
+          <View style={styles.previewRow}>
+            <Ionicons name="film-outline" size={24} color={Colors.primary} />
+            <View style={{ flex: 1, marginLeft: Spacing.md }}>
+              <Text style={styles.previewProjectName}>{preview.projectName}</Text>
+              <Text style={styles.previewRole}>
+                You'll join as: <Text style={{ color: Colors.primary, fontWeight: Typography.fontWeightBold }}>
+                  {ROLE_LABELS[preview.role] ?? preview.role}
+                </Text>
+              </Text>
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.joinBtn, joining && { opacity: 0.6 }]}
+            onPress={handleJoin}
+            disabled={joining}
+          >
+            {joining
+              ? <ActivityIndicator color="#000" />
+              : <Text style={styles.joinBtnText}>Join Production</Text>}
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={() => setPreview(null)} style={styles.cancelBtn}>
+            <Text style={styles.cancelBtnText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <View style={styles.divider} />
+
+      <View style={styles.infoRow}>
+        <Ionicons name="information-circle-outline" size={18} color={Colors.textMuted} />
+        <Text style={styles.infoText}>
+          Ask your production owner to generate a team code from the project's Team section.
+        </Text>
+      </View>
+    </View>
+  );
+
+  const renderTeamChat = () => (
+    <View style={styles.chatPane}>
+      <Text style={styles.sectionTitle}>Team Chat</Text>
+      <Text style={styles.sectionSub}>Coordinate with everyone on a production.</Text>
+
+      {projectsLoading ? (
+        <View style={styles.centerBlock}>
+          <ActivityIndicator color={Colors.primary} />
+          <Text style={styles.mutedText}>Loading productions...</Text>
+        </View>
+      ) : teamProjects.length === 0 ? (
+        <View style={styles.centerBlock}>
+          <Ionicons name="chatbubbles-outline" size={44} color={Colors.textMuted} />
+          <Text style={styles.emptyTitle}>No team productions yet</Text>
+          <Text style={styles.emptyText}>Join a production or create one in Scene Editor to start a team chat.</Text>
+        </View>
+      ) : (
+        <>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.projectRail} contentContainerStyle={styles.projectRailContent}>
+            {teamProjects.map((project) => (
+              <TouchableOpacity
+                key={project.id}
+                style={[styles.projectChip, selectedProjectId === project.id && styles.projectChipActive]}
+                onPress={() => setSelectedProjectId(project.id)}
+              >
+                <Text style={[styles.projectChipText, selectedProjectId === project.id && styles.projectChipTextActive]} numberOfLines={1}>{project.name}</Text>
+                <Text style={[styles.projectChipRole, selectedProjectId === project.id && styles.projectChipRoleActive]}>{ROLE_LABELS[project.role] ?? project.role}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
+          <View style={styles.chatCard}>
+            <View style={styles.chatHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.chatProjectName}>{selectedProject?.name ?? 'Select Production'}</Text>
+                <Text style={styles.chatProjectMeta}>{selectedProject ? ROLE_LABELS[selectedProject.role] ?? selectedProject.role : ''}</Text>
+              </View>
+              <TouchableOpacity style={styles.refreshBtn} onPress={handleRefreshChat} disabled={refreshing}>
+                {refreshing ? <ActivityIndicator color={Colors.primary} size="small" /> : <Ionicons name="refresh" size={18} color={Colors.primary} />}
+              </TouchableOpacity>
+            </View>
+
+            {messagesLoading ? (
+              <View style={styles.messagesCenter}>
+                <ActivityIndicator color={Colors.primary} />
+              </View>
+            ) : (
+              <FlatList
+                ref={chatListRef}
+                data={messages}
+                keyExtractor={(item) => item.id}
+                style={styles.messageList}
+                contentContainerStyle={messages.length === 0 ? styles.messageListEmpty : styles.messageListContent}
+                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefreshChat} tintColor={Colors.primary} />}
+                renderItem={({ item }) => {
+                  const isMine = item.sender_id === user?.id;
+                  return (
+                    <View style={[styles.messageBubble, isMine ? styles.messageBubbleMine : styles.messageBubbleTheirs]}>
+                      {!isMine && <Text style={styles.messageSender}>{profileName(item)}</Text>}
+                      <Text style={styles.messageText}>{item.content}</Text>
+                      <Text style={styles.messageTime}>{formatTime(item.created_at)}</Text>
+                    </View>
+                  );
+                }}
+                ListEmptyComponent={
+                  <View style={styles.emptyMessages}>
+                    <Ionicons name="chatbubble-ellipses-outline" size={36} color={Colors.textMuted} />
+                    <Text style={styles.emptyText}>No messages yet. Start the production chat.</Text>
+                  </View>
+                }
+              />
+            )}
+
+            <View style={styles.composerRow}>
+              <TextInput
+                style={styles.messageInput}
+                value={newMessage}
+                onChangeText={setNewMessage}
+                placeholder="Message your team..."
+                placeholderTextColor={Colors.textMuted}
+                multiline
+              />
+              <TouchableOpacity
+                style={[styles.sendBtn, (!newMessage.trim() || sendingMessage || !selectedProjectId) && { opacity: 0.5 }]}
+                onPress={sendTeamMessage}
+                disabled={!newMessage.trim() || sendingMessage || !selectedProjectId}
+              >
+                {sendingMessage ? <ActivityIndicator color="#000" size="small" /> : <Ionicons name="send" size={18} color="#000" />}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </>
+      )}
+    </View>
+  );
+
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <View style={styles.inner}>
-          {/* Icon + heading */}
-          <View style={styles.iconWrap}>
-            <Ionicons name="people-outline" size={48} color={Colors.primary} />
-          </View>
-          <Text style={styles.heading}>Join a Production</Text>
-          <Text style={styles.sub}>
-            Enter a team code from your production owner to join their project.
-          </Text>
-
-          {/* Code input */}
-          <View style={styles.inputRow}>
-            <TextInput
-              style={styles.codeInput}
-              value={code}
-              onChangeText={v => { setCode(v.toUpperCase()); setPreview(null); }}
-              placeholder="Enter team code"
-              placeholderTextColor={Colors.textMuted}
-              autoCapitalize="characters"
-              autoCorrect={false}
-              maxLength={12}
-            />
-            <TouchableOpacity
-              style={[styles.lookupBtn, (looking || code.trim().length < 6) && { opacity: 0.5 }]}
-              onPress={handleLookup}
-              disabled={looking || code.trim().length < 6}
-            >
-              {looking
-                ? <ActivityIndicator color="#000" size="small" />
-                : <Text style={styles.lookupBtnText}>Look Up</Text>}
-            </TouchableOpacity>
-          </View>
-
-          {/* Preview card */}
-          {preview && (
-            <View style={styles.previewCard}>
-              <View style={styles.previewRow}>
-                <Ionicons name="film-outline" size={24} color={Colors.primary} />
-                <View style={{ flex: 1, marginLeft: Spacing.md }}>
-                  <Text style={styles.previewProjectName}>{preview.projectName}</Text>
-                  <Text style={styles.previewRole}>
-                    You'll join as: <Text style={{ color: Colors.primary, fontWeight: Typography.fontWeightBold }}>
-                      {ROLE_LABELS[preview.role] ?? preview.role}
-                    </Text>
-                  </Text>
-                </View>
-              </View>
-
-              <TouchableOpacity
-                style={[styles.joinBtn, joining && { opacity: 0.6 }]}
-                onPress={handleJoin}
-                disabled={joining}
-              >
-                {joining
-                  ? <ActivityIndicator color="#000" />
-                  : <Text style={styles.joinBtnText}>Join Production</Text>}
-              </TouchableOpacity>
-
-              <TouchableOpacity onPress={() => setPreview(null)} style={styles.cancelBtn}>
-                <Text style={styles.cancelBtnText}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {/* Divider */}
-          <View style={styles.divider} />
-
-          {/* Info */}
-          <View style={styles.infoRow}>
-            <Ionicons name="information-circle-outline" size={18} color={Colors.textMuted} />
-            <Text style={styles.infoText}>
-              Ask your production owner to generate a team code from the project's Team section.
-            </Text>
-          </View>
+        <View style={styles.segmentWrap}>
+          <TouchableOpacity style={[styles.segmentBtn, activeTab === 'join' && styles.segmentBtnActive]} onPress={() => setActiveTab('join')}>
+            <Text style={[styles.segmentText, activeTab === 'join' && styles.segmentTextActive]}>Join Production</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.segmentBtn, activeTab === 'chat' && styles.segmentBtnActive]} onPress={() => setActiveTab('chat')}>
+            <Text style={[styles.segmentText, activeTab === 'chat' && styles.segmentTextActive]}>Team Chat</Text>
+          </TouchableOpacity>
         </View>
+        {activeTab === 'join' ? renderJoinProduction() : renderTeamChat()}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -210,7 +452,22 @@ export default function TeamsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  inner: { flex: 1, padding: Spacing.xl, justifyContent: 'center' },
+  segmentWrap: {
+    flexDirection: 'row',
+    marginHorizontal: Spacing.md,
+    marginTop: Spacing.md,
+    padding: 4,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.surfaceBorder,
+  },
+  segmentBtn: { flex: 1, paddingVertical: Spacing.sm, borderRadius: Radius.full, alignItems: 'center' },
+  segmentBtnActive: { backgroundColor: Colors.primary },
+  segmentText: { color: Colors.textMuted, fontSize: Typography.fontSizeXs, fontWeight: Typography.fontWeightSemibold },
+  segmentTextActive: { color: '#000' },
+  joinPane: { flex: 1, padding: Spacing.xl, justifyContent: 'center' },
+  chatPane: { flex: 1, padding: Spacing.md, paddingTop: Spacing.lg },
   iconWrap: { alignItems: 'center', marginBottom: Spacing.lg },
   heading: {
     color: Colors.textPrimary, fontSize: Typography.fontSizeXl,
@@ -256,4 +513,87 @@ const styles = StyleSheet.create({
   divider: { height: 1, backgroundColor: Colors.surfaceBorder, marginVertical: Spacing.xl },
   infoRow: { flexDirection: 'row', gap: Spacing.sm, alignItems: 'flex-start' },
   infoText: { flex: 1, color: Colors.textMuted, fontSize: Typography.fontSizeSm, lineHeight: 20 },
+  sectionTitle: { color: Colors.textPrimary, fontSize: Typography.fontSizeXl, fontWeight: Typography.fontWeightBold },
+  sectionSub: { color: Colors.textMuted, fontSize: Typography.fontSizeSm, marginTop: 4, marginBottom: Spacing.md },
+  centerBlock: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.xl, gap: Spacing.sm },
+  mutedText: { color: Colors.textMuted, fontSize: Typography.fontSizeSm },
+  emptyTitle: { color: Colors.textPrimary, fontSize: Typography.fontSizeMd, fontWeight: Typography.fontWeightBold, marginTop: Spacing.sm },
+  emptyText: { color: Colors.textMuted, fontSize: Typography.fontSizeSm, textAlign: 'center', lineHeight: 20, marginTop: 4 },
+  projectRail: { maxHeight: 64, marginBottom: Spacing.sm },
+  projectRailContent: { gap: Spacing.sm, paddingRight: Spacing.md },
+  projectChip: {
+    minWidth: 140,
+    maxWidth: 220,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.surfaceBorder,
+    borderRadius: Radius.lg,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+  },
+  projectChipActive: { backgroundColor: Colors.primaryMuted, borderColor: Colors.primary },
+  projectChipText: { color: Colors.textPrimary, fontSize: Typography.fontSizeSm, fontWeight: Typography.fontWeightSemibold },
+  projectChipTextActive: { color: Colors.primary },
+  projectChipRole: { color: Colors.textMuted, fontSize: Typography.fontSizeXs, marginTop: 2 },
+  projectChipRoleActive: { color: Colors.textSecondary },
+  chatCard: {
+    flex: 1,
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.surfaceBorder,
+    overflow: 'hidden',
+    ...Shadows.card,
+  },
+  chatHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.surfaceBorder,
+  },
+  chatProjectName: { color: Colors.textPrimary, fontSize: Typography.fontSizeMd, fontWeight: Typography.fontWeightBold },
+  chatProjectMeta: { color: Colors.textMuted, fontSize: Typography.fontSizeXs, marginTop: 2 },
+  refreshBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: Radius.full, backgroundColor: Colors.surface },
+  messagesCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  messageList: { flex: 1 },
+  messageListContent: { padding: Spacing.md, gap: Spacing.sm },
+  messageListEmpty: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.xl },
+  emptyMessages: { alignItems: 'center', gap: Spacing.sm },
+  messageBubble: {
+    maxWidth: '82%',
+    borderRadius: Radius.lg,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.surfaceBorder,
+  },
+  messageBubbleMine: { alignSelf: 'flex-end', backgroundColor: Colors.primaryMuted, borderColor: Colors.primaryDim },
+  messageBubbleTheirs: { alignSelf: 'flex-start', backgroundColor: Colors.surface },
+  messageSender: { color: Colors.primary, fontSize: Typography.fontSizeXs, fontWeight: Typography.fontWeightBold, marginBottom: 2 },
+  messageText: { color: Colors.textPrimary, fontSize: Typography.fontSizeSm, lineHeight: 20 },
+  messageTime: { color: Colors.textMuted, fontSize: 10, alignSelf: 'flex-end', marginTop: 4 },
+  composerRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: Spacing.sm,
+    padding: Spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: Colors.surfaceBorder,
+    backgroundColor: Colors.surface,
+  },
+  messageInput: {
+    flex: 1,
+    minHeight: 42,
+    maxHeight: 110,
+    backgroundColor: Colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: Colors.surfaceBorder,
+    borderRadius: Radius.lg,
+    color: Colors.textPrimary,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    fontSize: Typography.fontSizeSm,
+  },
+  sendBtn: { width: 42, height: 42, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.primary },
 });
