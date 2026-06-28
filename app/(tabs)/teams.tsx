@@ -10,7 +10,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { Colors, Spacing, Typography, Radius, Shadows } from '@/constants/theme';
 
-type TeamsTab = 'join' | 'chat';
+type TeamsTab = 'join' | 'chat' | 'notifications';
 
 interface CodePreview {
   codeId: string;
@@ -34,14 +34,37 @@ interface TeamMessage {
   profiles?: { full_name: string | null }[] | { full_name: string | null } | null;
 }
 
+interface AppNotification {
+  id: string;
+  user_id: string;
+  project_id: string | null;
+  type: string;
+  title: string;
+  body: string | null;
+  source_table: string | null;
+  source_id: string | null;
+  read_at: string | null;
+  created_at: string;
+}
+
 const ROLE_LABELS: Record<string, string> = {
   owner: 'Owner', editor: 'Editor', viewer: 'Viewer',
   set_decorator: 'Set Decorator', art_director: 'Art Director',
   prop_master: 'Props', producer: 'Producer',
 };
 
+const NOTIFICATION_LABELS: Record<string, string> = {
+  team_message: 'Team Chat',
+  marketplace_message: 'Marketplace',
+  marketplace_reservation: 'Marketplace',
+  system: 'System',
+};
+
 const formatTime = (iso: string) =>
   new Date(iso).toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' });
+
+const formatDateTime = (iso: string) =>
+  new Date(iso).toLocaleString('en-CA', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 const profileName = (message: TeamMessage) => {
   const profile = Array.isArray(message.profiles) ? message.profiles[0] : message.profiles;
@@ -69,7 +92,34 @@ export default function TeamsScreen() {
   const [sendingMessage, setSendingMessage] = useState(false);
   const chatListRef = useRef<FlatList<TeamMessage>>(null);
 
+  // Notifications state
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsRefreshing, setNotificationsRefreshing] = useState(false);
+  const [updatingNotificationId, setUpdatingNotificationId] = useState<string | null>(null);
+
+  const unreadCount = notifications.filter((notification) => !notification.read_at).length;
   const selectedProject = teamProjects.find((project) => project.id === selectedProjectId) ?? null;
+
+  const fetchNotifications = useCallback(async () => {
+    if (!user) return;
+    setNotificationsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('app_notifications')
+        .select('id, user_id, project_id, type, title, body, source_table, source_id, read_at, created_at')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      setNotifications((data ?? []) as AppNotification[]);
+    } catch (err: any) {
+      Alert.alert('Error loading notifications', err.message ?? 'Could not load notifications.');
+    } finally {
+      setNotificationsLoading(false);
+      setNotificationsRefreshing(false);
+    }
+  }, [user]);
 
   const fetchTeamProjects = useCallback(async () => {
     if (!user) return;
@@ -137,8 +187,13 @@ export default function TeamsScreen() {
   }, []);
 
   useEffect(() => {
+    fetchNotifications();
+  }, [fetchNotifications]);
+
+  useEffect(() => {
     if (activeTab === 'chat') fetchTeamProjects();
-  }, [activeTab, fetchTeamProjects]);
+    if (activeTab === 'notifications') fetchNotifications();
+  }, [activeTab, fetchTeamProjects, fetchNotifications]);
 
   useEffect(() => {
     if (activeTab === 'chat' && selectedProjectId) fetchTeamMessages(selectedProjectId);
@@ -149,7 +204,58 @@ export default function TeamsScreen() {
     setRefreshing(true);
     await fetchTeamProjects();
     if (selectedProjectId) await fetchTeamMessages(selectedProjectId);
+    await fetchNotifications();
     setRefreshing(false);
+  };
+
+  const handleRefreshNotifications = async () => {
+    setNotificationsRefreshing(true);
+    await fetchNotifications();
+  };
+
+  const markNotificationRead = async (notification: AppNotification) => {
+    if (notification.read_at) return;
+    setUpdatingNotificationId(notification.id);
+    try {
+      const readAt = new Date().toISOString();
+      const { error } = await supabase
+        .from('app_notifications')
+        .update({ read_at: readAt })
+        .eq('id', notification.id);
+      if (error) throw error;
+      setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, read_at: readAt } : item));
+    } catch (err: any) {
+      Alert.alert('Error', err.message ?? 'Could not mark notification read.');
+    } finally {
+      setUpdatingNotificationId(null);
+    }
+  };
+
+  const markAllNotificationsRead = async () => {
+    if (!user || unreadCount === 0) return;
+    setNotificationsRefreshing(true);
+    try {
+      const readAt = new Date().toISOString();
+      const { error } = await supabase
+        .from('app_notifications')
+        .update({ read_at: readAt })
+        .eq('user_id', user.id)
+        .is('read_at', null);
+      if (error) throw error;
+      setNotifications((current) => current.map((item) => item.read_at ? item : { ...item, read_at: readAt }));
+    } catch (err: any) {
+      Alert.alert('Error', err.message ?? 'Could not mark notifications read.');
+    } finally {
+      setNotificationsRefreshing(false);
+    }
+  };
+
+  const openNotification = async (notification: AppNotification) => {
+    await markNotificationRead(notification);
+    if (notification.type === 'team_message' && notification.project_id) {
+      setSelectedProjectId(notification.project_id);
+      setActiveTab('chat');
+    }
   };
 
   const handleLookup = async () => {
@@ -430,6 +536,61 @@ export default function TeamsScreen() {
     </View>
   );
 
+  const renderNotifications = () => (
+    <View style={styles.notificationsPane}>
+      <View style={styles.notificationsHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.sectionTitle}>Notifications</Text>
+          <Text style={styles.sectionSub}>{unreadCount > 0 ? `${unreadCount} unread update${unreadCount === 1 ? '' : 's'}` : 'No unread updates'}</Text>
+        </View>
+        <TouchableOpacity style={[styles.markAllBtn, unreadCount === 0 && { opacity: 0.45 }]} onPress={markAllNotificationsRead} disabled={unreadCount === 0 || notificationsRefreshing}>
+          <Text style={styles.markAllText}>Mark all read</Text>
+        </TouchableOpacity>
+      </View>
+
+      {notificationsLoading ? (
+        <View style={styles.centerBlock}>
+          <ActivityIndicator color={Colors.primary} />
+          <Text style={styles.mutedText}>Loading notifications...</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={notifications}
+          keyExtractor={(item) => item.id}
+          refreshControl={<RefreshControl refreshing={notificationsRefreshing} onRefresh={handleRefreshNotifications} tintColor={Colors.primary} />}
+          contentContainerStyle={notifications.length === 0 ? styles.notificationListEmpty : styles.notificationList}
+          renderItem={({ item }) => {
+            const unread = !item.read_at;
+            return (
+              <TouchableOpacity style={[styles.notificationCard, unread && styles.notificationCardUnread]} onPress={() => openNotification(item)}>
+                <View style={styles.notificationIconWrap}>
+                  <Ionicons name={item.type === 'team_message' ? 'chatbubble-ellipses-outline' : 'notifications-outline'} size={18} color={Colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={styles.notificationTitleRow}>
+                    <Text style={styles.notificationType}>{NOTIFICATION_LABELS[item.type] ?? 'Notification'}</Text>
+                    {unread && <View style={styles.unreadDot} />}
+                  </View>
+                  <Text style={styles.notificationTitle}>{item.title}</Text>
+                  {item.body ? <Text style={styles.notificationBody} numberOfLines={2}>{item.body}</Text> : null}
+                  <Text style={styles.notificationTime}>{formatDateTime(item.created_at)}</Text>
+                </View>
+                {updatingNotificationId === item.id && <ActivityIndicator color={Colors.primary} size="small" />}
+              </TouchableOpacity>
+            );
+          }}
+          ListEmptyComponent={
+            <View style={styles.emptyMessages}>
+              <Ionicons name="notifications-off-outline" size={40} color={Colors.textMuted} />
+              <Text style={styles.emptyTitle}>No notifications yet</Text>
+              <Text style={styles.emptyText}>Team Chat and Marketplace updates will appear here.</Text>
+            </View>
+          }
+        />
+      )}
+    </View>
+  );
+
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView
@@ -438,13 +599,23 @@ export default function TeamsScreen() {
       >
         <View style={styles.segmentWrap}>
           <TouchableOpacity style={[styles.segmentBtn, activeTab === 'join' && styles.segmentBtnActive]} onPress={() => setActiveTab('join')}>
-            <Text style={[styles.segmentText, activeTab === 'join' && styles.segmentTextActive]}>Join Production</Text>
+            <Text style={[styles.segmentText, activeTab === 'join' && styles.segmentTextActive]}>Join</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.segmentBtn, activeTab === 'chat' && styles.segmentBtnActive]} onPress={() => setActiveTab('chat')}>
-            <Text style={[styles.segmentText, activeTab === 'chat' && styles.segmentTextActive]}>Team Chat</Text>
+            <Text style={[styles.segmentText, activeTab === 'chat' && styles.segmentTextActive]}>Chat</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.segmentBtn, activeTab === 'notifications' && styles.segmentBtnActive]} onPress={() => setActiveTab('notifications')}>
+            <View style={styles.segmentWithBadge}>
+              <Text style={[styles.segmentText, activeTab === 'notifications' && styles.segmentTextActive]}>Updates</Text>
+              {unreadCount > 0 && (
+                <View style={[styles.segmentBadge, activeTab === 'notifications' && styles.segmentBadgeActive]}>
+                  <Text style={[styles.segmentBadgeText, activeTab === 'notifications' && styles.segmentBadgeTextActive]}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+                </View>
+              )}
+            </View>
           </TouchableOpacity>
         </View>
-        {activeTab === 'join' ? renderJoinProduction() : renderTeamChat()}
+        {activeTab === 'join' ? renderJoinProduction() : activeTab === 'chat' ? renderTeamChat() : renderNotifications()}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -466,8 +637,14 @@ const styles = StyleSheet.create({
   segmentBtnActive: { backgroundColor: Colors.primary },
   segmentText: { color: Colors.textMuted, fontSize: Typography.fontSizeXs, fontWeight: Typography.fontWeightSemibold },
   segmentTextActive: { color: '#000' },
+  segmentWithBadge: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  segmentBadge: { minWidth: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5, backgroundColor: Colors.primary },
+  segmentBadgeActive: { backgroundColor: '#000' },
+  segmentBadgeText: { color: '#000', fontSize: 10, fontWeight: Typography.fontWeightBold },
+  segmentBadgeTextActive: { color: Colors.primary },
   joinPane: { flex: 1, padding: Spacing.xl, justifyContent: 'center' },
   chatPane: { flex: 1, padding: Spacing.md, paddingTop: Spacing.lg },
+  notificationsPane: { flex: 1, padding: Spacing.md, paddingTop: Spacing.lg },
   iconWrap: { alignItems: 'center', marginBottom: Spacing.lg },
   heading: {
     color: Colors.textPrimary, fontSize: Typography.fontSizeXl,
@@ -596,4 +773,18 @@ const styles = StyleSheet.create({
     fontSize: Typography.fontSizeSm,
   },
   sendBtn: { width: 42, height: 42, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.primary },
+  notificationsHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.md, gap: Spacing.md },
+  markAllBtn: { backgroundColor: Colors.surfaceElevated, borderWidth: 1, borderColor: Colors.surfaceBorder, borderRadius: Radius.full, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm },
+  markAllText: { color: Colors.primary, fontSize: Typography.fontSizeXs, fontWeight: Typography.fontWeightBold },
+  notificationList: { gap: Spacing.sm, paddingBottom: Spacing.xl },
+  notificationListEmpty: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.xl },
+  notificationCard: { flexDirection: 'row', gap: Spacing.sm, backgroundColor: Colors.surfaceElevated, borderWidth: 1, borderColor: Colors.surfaceBorder, borderRadius: Radius.lg, padding: Spacing.md, ...Shadows.card },
+  notificationCardUnread: { borderColor: Colors.primaryDim, backgroundColor: Colors.primaryMuted },
+  notificationIconWrap: { width: 36, height: 36, borderRadius: Radius.full, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center' },
+  notificationTitleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, marginBottom: 2 },
+  notificationType: { color: Colors.primary, fontSize: Typography.fontSizeXs, fontWeight: Typography.fontWeightBold, textTransform: 'uppercase', letterSpacing: 0.5 },
+  unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.primary },
+  notificationTitle: { color: Colors.textPrimary, fontSize: Typography.fontSizeSm, fontWeight: Typography.fontWeightSemibold, lineHeight: 19 },
+  notificationBody: { color: Colors.textSecondary, fontSize: Typography.fontSizeSm, marginTop: 4, lineHeight: 19 },
+  notificationTime: { color: Colors.textMuted, fontSize: 10, marginTop: 6 },
 });
