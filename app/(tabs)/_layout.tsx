@@ -28,6 +28,9 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
+        sceneStyle: {
+          backgroundColor: Colors.background,
+        },
         tabBarStyle: {
           backgroundColor: Colors.surface,
           borderTopColor: Colors.surfaceBorder,
