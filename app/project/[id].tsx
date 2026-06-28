@@ -30,7 +30,7 @@ interface Project {
 interface ProjectMember {
   user_id: string;
   role: string;
-  profiles: { full_name: string | null; } | null;
+  profiles: { full_name: string | null; }[] | null;
 }
 
 interface JoinCode {
@@ -310,7 +310,7 @@ export default function ProjectDetailScreen() {
               </View>
               <View style={styles.cardBody}>
                 <Text style={styles.cardTitle}>{item.name}</Text>
-                <Text style={[styles.cardStatus, { color: STATUS_COLORS[item.status] ?? Colors.textMuted }]}>
+                <Text style={[styles.cardStatus, { color: STATUS_COLORS[item.status] ?? Colors.textMuted }]}> 
                   {item.status.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}
                 </Text>
               </View>
@@ -349,22 +349,25 @@ export default function ProjectDetailScreen() {
             {/* Members */}
             {members.length > 0 && (
               <View style={styles.memberList}>
-                {members.map(m => (
-                  <View key={m.user_id} style={styles.memberRow}>
-                    <View style={styles.memberAvatar}>
-                      <Text style={styles.memberAvatarText}>
-                        {(m.profiles?.full_name ?? '?')[0].toUpperCase()}
+                {members.map(m => {
+                  const memberName = m.profiles?.[0]?.full_name ?? 'Unknown';
+                  return (
+                    <View key={m.user_id} style={styles.memberRow}>
+                      <View style={styles.memberAvatar}>
+                        <Text style={styles.memberAvatarText}>
+                          {(memberName === 'Unknown' ? '?' : memberName)[0].toUpperCase()}
+                        </Text>
+                      </View>
+                      <Text style={styles.memberName}>
+                        {memberName}
+                        {m.user_id === user?.id ? ' (you)' : ''}
                       </Text>
+                      <View style={styles.roleBadge}>
+                        <Text style={styles.roleBadgeText}>{ROLE_LABELS[m.role] ?? m.role}</Text>
+                      </View>
                     </View>
-                    <Text style={styles.memberName}>
-                      {m.profiles?.full_name ?? 'Unknown'}
-                      {m.user_id === user?.id ? ' (you)' : ''}
-                    </Text>
-                    <View style={styles.roleBadge}>
-                      <Text style={styles.roleBadgeText}>{ROLE_LABELS[m.role] ?? m.role}</Text>
-                    </View>
-                  </View>
-                ))}
+                  );
+                })}
               </View>
             )}
 
