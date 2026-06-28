@@ -110,6 +110,8 @@ export default function ProjectsScreen() {
   }
 
   async function deleteProjectRecords(projectId: string) {
+    if (!user) throw new Error('You must be signed in to delete a production.');
+
     const { data: sceneRows, error: scenesFetchError } = await supabase
       .from('scenes')
       .select('id')
@@ -120,29 +122,48 @@ export default function ProjectsScreen() {
     const sceneIds = (sceneRows ?? []).map((scene) => scene.id);
 
     if (sceneIds.length > 0) {
-      await supabase.from('scene_assets').delete().in('scene_id', sceneIds);
-      await supabase.from('annotations').delete().in('scene_id', sceneIds);
-      await supabase.from('comments').delete().in('scene_id', sceneIds);
-      await supabase.from('scene_snapshots').delete().in('scene_id', sceneIds);
+      const sceneScopedDeletes = [
+        supabase.from('scene_assets').delete().in('scene_id', sceneIds),
+        supabase.from('annotations').delete().in('scene_id', sceneIds),
+        supabase.from('comments').delete().in('scene_id', sceneIds),
+        supabase.from('scene_snapshots').delete().in('scene_id', sceneIds),
+      ];
+
+      for (const deleteCall of sceneScopedDeletes) {
+        const { error } = await deleteCall;
+        if (error) throw error;
+      }
     }
 
-    await supabase.from('inventory').delete().eq('project_id', projectId);
-    await supabase.from('scenes').delete().eq('project_id', projectId);
-    await supabase.from('project_members').delete().eq('project_id', projectId);
+    const projectScopedDeletes = [
+      supabase.from('inventory').delete().eq('project_id', projectId),
+      supabase.from('assets').delete().eq('project_id', projectId),
+      supabase.from('project_locations').delete().eq('project_id', projectId),
+      supabase.from('scenes').delete().eq('project_id', projectId),
+      supabase.from('project_members').delete().eq('project_id', projectId),
+    ];
 
-    const { error: projectDeleteError } = await supabase
+    for (const deleteCall of projectScopedDeletes) {
+      const { error } = await deleteCall;
+      if (error) throw error;
+    }
+
+    const { data: deletedProject, error: projectDeleteError } = await supabase
       .from('projects')
       .delete()
       .eq('id', projectId)
-      .eq('owner_id', user?.id);
+      .eq('owner_id', user.id)
+      .select('id')
+      .maybeSingle();
 
     if (projectDeleteError) throw projectDeleteError;
+    if (!deletedProject) throw new Error('Could not delete this production. It may have already been removed or you may not have permission.');
   }
 
   function confirmDeleteProject(project: Project) {
     Alert.alert(
       'Delete production?',
-      `Delete "${project.name}" and its scenes? This cannot be undone.`,
+      `Delete "${project.name}" and all related scenes, assets, and room scans? This cannot be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
