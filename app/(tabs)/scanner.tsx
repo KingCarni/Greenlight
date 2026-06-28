@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
   Alert, ActivityIndicator, Modal, TextInput,
@@ -7,10 +7,15 @@ import {
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { Colors, Spacing, Typography, Radius } from '@/constants/theme';
+
+interface ProjectOption {
+  id: string;
+  name: string;
+}
 
 export default function ScannerScreen() {
   const { user } = useAuth();
@@ -21,26 +26,47 @@ export default function ScannerScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [capturedUri, setCapturedUri] = useState<string | null>(null);
   const [sceneName, setSceneName] = useState('');
-  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const cameraRef = useRef<CameraView>(null);
 
-  // Fetch user's projects for scene assignment
-  useEffect(() => {
-    async function fetchProjects() {
-      if (!user) return;
-      const { data } = await supabase
-        .from('projects')
-        .select('id, name')
-        .eq('owner_id', user.id)
-        .order('created_at', { ascending: false });
-      if (data && data.length > 0) {
-        setProjects(data);
-        setSelectedProject(data[0].id);
-      }
+  async function fetchProjects() {
+    if (!user) {
+      setProjects([]);
+      setSelectedProject(null);
+      return;
     }
+
+    const { data, error } = await supabase
+      .from('projects')
+      .select('id, name')
+      .eq('owner_id', user.id)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching scanner projects:', error.message);
+      return;
+    }
+
+    const rows = (data ?? []) as ProjectOption[];
+    setProjects(rows);
+    setSelectedProject((current) => {
+      if (current && rows.some((project) => project.id === current)) return current;
+      return rows[0]?.id ?? null;
+    });
+  }
+
+  // Fetch user's projects for scene assignment.
+  // Also refresh on tab focus so deleted productions do not remain selected.
+  useEffect(() => {
     fetchProjects();
   }, [user]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchProjects();
+    }, [user])
+  );
 
   // Take photo with camera
   async function handleCapture() {
