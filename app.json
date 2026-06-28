@@ -21,14 +21,15 @@
         "backgroundColor": "#0a0a0a"
       },
       "package": "com.greenlight.app"
-          },
+    },
     "web": {
       "favicon": "./assets/favicon.png",
       "bundler": "metro"
     },
     "plugins": [
       "expo-router",
-      "expo-font"
+      "expo-font",
+      "expo-notifications"
     ],
     "scheme": "greenlight",
     "experiments": {
