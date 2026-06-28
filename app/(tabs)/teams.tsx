@@ -60,7 +60,7 @@ export default function TeamsScreen() {
         .single();
       if (existing) { Alert.alert('Already a member', "You're already on this production's team."); return; }
 
-      // Fetch project name
+      // Fetch project name. This may be hidden by RLS before joining, so handleJoin fetches it again after membership is created.
       const { data: projectData } = await supabase
         .from('projects')
         .select('name')
@@ -70,7 +70,7 @@ export default function TeamsScreen() {
       setPreview({
         codeId: codeData.id,
         projectId: codeData.project_id,
-        projectName: projectData?.name ?? 'Unknown Production',
+        projectName: projectData?.name ?? 'Production',
         role: codeData.role,
       });
     } catch (err: any) {
@@ -93,6 +93,14 @@ export default function TeamsScreen() {
       });
       if (memberError) throw memberError;
 
+      // Once membership exists, RLS should allow the project name to be read.
+      const { data: joinedProject } = await supabase
+        .from('projects')
+        .select('name')
+        .eq('id', preview.projectId)
+        .single();
+      const joinedProjectName = joinedProject?.name ?? preview.projectName ?? 'Production';
+
       // Increment use_count on the code
       await supabase
         .from('project_join_codes')
@@ -106,7 +114,7 @@ export default function TeamsScreen() {
 
       setCode('');
       setPreview(null);
-      Alert.alert('Joined!', `You've joined "${preview.projectName}" as ${ROLE_LABELS[preview.role] ?? preview.role}. Open the Scene Editor to see it.`);
+      Alert.alert('Joined!', `You've joined "${joinedProjectName}" as ${ROLE_LABELS[preview.role] ?? preview.role}. Open the Scene Editor to see it.`);
     } catch (err: any) {
       Alert.alert('Error joining', err.message);
     } finally {
