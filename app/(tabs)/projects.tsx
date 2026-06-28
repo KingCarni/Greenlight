@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity,
   StyleSheet, Modal, TextInput, KeyboardAvoidingView,
   Platform, ActivityIndicator, Alert
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Typography, Radius, Shadows } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
@@ -28,36 +28,43 @@ export default function ProjectsScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // New project form state
   const [newTitle, setNewTitle] = useState('');
   const [newGenre, setNewGenre] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [creating, setCreating] = useState(false);
 
-  // ── Fetch projects for current user ──────────────────────────
-  async function fetchProjects() {
-    if (!user) return;
+  const fetchProjects = useCallback(async () => {
+    if (!user) {
+      setProjects([]);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
 
     const { data, error } = await supabase
       .from('projects')
       .select('*')
-      .eq('owner_id', user.id)
       .order('created_at', { ascending: false });
 
     if (error) {
       console.error('Error fetching projects:', error.message);
     } else {
-      setProjects(data as Project[]);
+      setProjects((data ?? []) as Project[]);
     }
     setLoading(false);
-  }
+  }, [user]);
 
   useEffect(() => {
     fetchProjects();
-  }, [user]);
+  }, [fetchProjects]);
 
-  // ── Create new project ────────────────────────────────────────
+  useFocusEffect(
+    useCallback(() => {
+      fetchProjects();
+    }, [fetchProjects])
+  );
+
   async function handleCreateProject() {
     if (!newTitle.trim()) {
       Alert.alert('Project name required', 'Please enter a name for your production.');
@@ -67,7 +74,6 @@ export default function ProjectsScreen() {
 
     setCreating(true);
 
-    // Insert project
     const { data: project, error: projectError } = await supabase
       .from('projects')
       .insert({
@@ -85,7 +91,6 @@ export default function ProjectsScreen() {
       return;
     }
 
-    // Auto-add creator as owner in project_members
     const { error: memberError } = await supabase
       .from('project_members')
       .insert({
@@ -98,14 +103,12 @@ export default function ProjectsScreen() {
       console.error('Error adding project member:', memberError.message);
     }
 
-    // Reset form and close modal
     setNewTitle('');
     setNewGenre('');
     setNewDescription('');
     setModalVisible(false);
     setCreating(false);
 
-    // Refresh list
     fetchProjects();
   }
 
@@ -186,10 +189,8 @@ export default function ProjectsScreen() {
     );
   }
 
-  // ── Render ────────────────────────────────────────────────────
   return (
     <View style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>Projects</Text>
         <TouchableOpacity style={styles.addButton} onPress={() => setModalVisible(true)}>
@@ -197,7 +198,6 @@ export default function ProjectsScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Project list */}
       {loading ? (
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={Colors.primary} />
@@ -209,47 +209,51 @@ export default function ProjectsScreen() {
           contentContainerStyle={styles.list}
           onRefresh={fetchProjects}
           refreshing={loading}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.card}
-              onPress={() => router.push({ pathname: '/project/[id]', params: { id: item.id } })}
-              disabled={deletingId === item.id}
-            >
-              <View style={styles.cardThumbnail}>
-                <Ionicons name="film" size={32} color={Colors.primary} />
-              </View>
-              <View style={styles.cardBody}>
-                <Text style={styles.cardTitle}>{item.name}</Text>
-                {item.description && (
-                  <Text style={styles.cardGenre} numberOfLines={1}>{item.description}</Text>
-                )}
-                <Text style={styles.cardStatus}>Active</Text>
-              </View>
+          renderItem={({ item }) => {
+            const isOwner = item.owner_id === user?.id;
+            return (
               <TouchableOpacity
-                style={styles.deleteButton}
-                onPress={() => confirmDeleteProject(item)}
+                style={styles.card}
+                onPress={() => router.push({ pathname: '/project/[id]', params: { id: item.id } })}
                 disabled={deletingId === item.id}
-                hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
               >
-                {deletingId === item.id ? (
-                  <ActivityIndicator size="small" color="#ff6b6b" />
-                ) : (
-                  <Ionicons name="trash-outline" size={18} color="#ff6b6b" />
+                <View style={styles.cardThumbnail}>
+                  <Ionicons name="film" size={32} color={Colors.primary} />
+                </View>
+                <View style={styles.cardBody}>
+                  <Text style={styles.cardTitle}>{item.name}</Text>
+                  {item.description && (
+                    <Text style={styles.cardGenre} numberOfLines={1}>{item.description}</Text>
+                  )}
+                  <Text style={styles.cardStatus}>{isOwner ? 'Owner' : 'Team Member'}</Text>
+                </View>
+                {isOwner && (
+                  <TouchableOpacity
+                    style={styles.deleteButton}
+                    onPress={() => confirmDeleteProject(item)}
+                    disabled={deletingId === item.id}
+                    hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
+                  >
+                    {deletingId === item.id ? (
+                      <ActivityIndicator size="small" color="#ff6b6b" />
+                    ) : (
+                      <Ionicons name="trash-outline" size={18} color="#ff6b6b" />
+                    )}
+                  </TouchableOpacity>
                 )}
+                <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
               </TouchableOpacity>
-              <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
-            </TouchableOpacity>
-          )}
+            );
+          }}
           ListEmptyComponent={
             <View style={styles.empty}>
               <Ionicons name="film-outline" size={48} color={Colors.textMuted} />
-              <Text style={styles.emptyText}>No projects yet.{'\n'}Tap + to create your first production.</Text>
+              <Text style={styles.emptyText}>No projects yet.{`\n`}Tap + to create your first production.</Text>
             </View>
           }
         />
       )}
 
-      {/* New Project Modal */}
       <Modal
         visible={modalVisible}
         animationType="slide"
@@ -364,8 +368,6 @@ const styles = StyleSheet.create({
   },
   empty: { alignItems: 'center', marginTop: Spacing.xxl, paddingHorizontal: Spacing.xl },
   emptyText: { color: Colors.textMuted, fontSize: Typography.fontSizeSm, marginTop: Spacing.md, textAlign: 'center', lineHeight: 22 },
-
-  // Modal
   modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
   modalSheet: {
     backgroundColor: Colors.surfaceElevated,
