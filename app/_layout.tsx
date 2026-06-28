@@ -6,7 +6,7 @@ import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { useRouter, useSegments } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Colors } from '@/constants/theme';
-import { registerForPushNotifications } from '@/lib/pushNotifications';
+import { registerForPushNotificationsLater } from '@/lib/pushNotifications';
 
 function RootNavigator() {
   const { session, loading } = useAuth();
@@ -27,7 +27,7 @@ function RootNavigator() {
 
   useEffect(() => {
     if (!session?.user?.id) return;
-    registerForPushNotifications(session.user.id);
+    registerForPushNotificationsLater(session.user.id);
   }, [session?.user?.id]);
 
   if (loading) {
