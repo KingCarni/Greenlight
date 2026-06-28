@@ -40,7 +40,6 @@ export default function ScannerScreen() {
     const { data, error } = await supabase
       .from('projects')
       .select('id, name')
-      .eq('owner_id', user.id)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -56,8 +55,6 @@ export default function ScannerScreen() {
     });
   }
 
-  // Fetch user's projects for scene assignment.
-  // Also refresh on tab focus so deleted productions do not remain selected.
   useEffect(() => {
     fetchProjects();
   }, [user]);
@@ -68,7 +65,6 @@ export default function ScannerScreen() {
     }, [user])
   );
 
-  // Take photo with camera
   async function handleCapture() {
     if (!cameraRef.current) return;
     setCapturing(true);
@@ -85,7 +81,6 @@ export default function ScannerScreen() {
     }
   }
 
-  // Pick from gallery
   async function handlePickImage() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -97,7 +92,6 @@ export default function ScannerScreen() {
     }
   }
 
-  // Upload photo and create scene
   async function handleCreateScene() {
     if (!capturedUri || !sceneName.trim() || !selectedProject || !user) {
       Alert.alert('Required', 'Please enter a scene name.');
@@ -105,7 +99,6 @@ export default function ScannerScreen() {
     }
     setUploading(true);
     try {
-      // Upload photo to Supabase Storage
       const filename = `${user.id}/${Date.now()}.jpg`;
       const response = await fetch(capturedUri);
       const blob = await response.blob();
@@ -117,12 +110,10 @@ export default function ScannerScreen() {
 
       if (uploadError) throw uploadError;
 
-      // Get public URL
       const { data: urlData } = supabase.storage
         .from('scene-photos')
         .getPublicUrl(filename);
 
-      // Create scene record
       const { data: scene, error: sceneError } = await supabase
         .from('scenes')
         .insert({
@@ -141,7 +132,6 @@ export default function ScannerScreen() {
       setSceneName('');
       setCapturedUri(null);
 
-      // Navigate to the scene canvas
       router.push({ pathname: '/scene/[id]', params: { id: scene.id } });
 
     } catch (e: any) {
@@ -151,12 +141,11 @@ export default function ScannerScreen() {
     }
   }
 
-  // No projects yet
   if (projects.length === 0) {
     return (
       <View style={styles.centered}>
         <Ionicons name="film-outline" size={48} color={Colors.textMuted} />
-        <Text style={styles.emptyText}>Create a project first{'\n'}before scanning a room.</Text>
+        <Text style={styles.emptyText}>Create or join a project first{`\n`}before scanning a room.</Text>
         <TouchableOpacity style={styles.button} onPress={() => router.push('/(tabs)/projects')}>
           <Text style={styles.buttonText}>Go to Projects</Text>
         </TouchableOpacity>
@@ -164,12 +153,11 @@ export default function ScannerScreen() {
     );
   }
 
-  // Camera permission not granted
   if (!permission?.granted) {
     return (
       <View style={styles.centered}>
         <Ionicons name="camera-outline" size={48} color={Colors.textMuted} />
-        <Text style={styles.emptyText}>Camera access is needed{'\n'}to scan rooms.</Text>
+        <Text style={styles.emptyText}>Camera access is needed{`\n`}to scan rooms.</Text>
         <TouchableOpacity style={styles.button} onPress={requestPermission}>
           <Text style={styles.buttonText}>Grant Permission</Text>
         </TouchableOpacity>
@@ -182,86 +170,70 @@ export default function ScannerScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Camera View */}
       <CameraView ref={cameraRef} style={styles.camera} facing="back">
-        {/* Header overlay */}
         <View style={styles.overlay}>
-          <Text style={styles.overlayTitle}>Room Scanner</Text>
-          <Text style={styles.overlayHint}>Point at the space you want to dress</Text>
-        </View>
+          <View style={styles.topBar}>
+            <Text style={styles.title}>Room Scanner</Text>
+          </View>
 
-        {/* Bottom controls */}
-        <View style={styles.controls}>
-          <TouchableOpacity style={styles.galleryButton} onPress={handlePickImage}>
-            <Ionicons name="images-outline" size={26} color="#fff" />
-          </TouchableOpacity>
+          <View style={styles.bottomControls}>
+            <TouchableOpacity style={styles.galleryButton} onPress={handlePickImage}>
+              <Ionicons name="images-outline" size={24} color={Colors.textPrimary} />
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.captureButton}
-            onPress={handleCapture}
-            disabled={capturing}
-          >
-            {capturing
-              ? <ActivityIndicator color="#000" />
-              : <View style={styles.captureInner} />
-            }
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.captureButton, capturing && styles.captureButtonDisabled]}
+              onPress={handleCapture}
+              disabled={capturing}
+            >
+              {capturing ? <ActivityIndicator color="#000" /> : <View style={styles.captureInner} />}
+            </TouchableOpacity>
 
-          <View style={{ width: 52 }} />
+            <View style={styles.galleryButton} />
+          </View>
         </View>
       </CameraView>
 
-      {/* Scene Name Modal */}
-      <Modal visible={modalVisible} animationType="slide" transparent>
-        <KeyboardAvoidingView
-          style={styles.modalOverlay}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
+      <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={() => setModalVisible(false)}>
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Name this Scene</Text>
-              <TouchableOpacity onPress={() => { setModalVisible(false); setCapturedUri(null); }}>
+              <Text style={styles.modalTitle}>Save Room Scan</Text>
+              <TouchableOpacity onPress={() => setModalVisible(false)}>
                 <Ionicons name="close" size={24} color={Colors.textMuted} />
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.label}>Scene Name</Text>
+            <Text style={styles.label}>Scene / Room Name</Text>
             <TextInput
               style={styles.input}
-              placeholder="e.g. INT. KITCHEN - DAY"
-              placeholderTextColor={Colors.textMuted}
               value={sceneName}
               onChangeText={setSceneName}
-              autoFocus
+              placeholder="e.g. Living Room - Before"
+              placeholderTextColor={Colors.textMuted}
             />
 
-            {projects.length > 1 && (
-              <>
-                <Text style={styles.label}>Production</Text>
-                {projects.map((p) => (
-                  <TouchableOpacity
-                    key={p.id}
-                    style={[styles.projectOption, selectedProject === p.id && styles.projectOptionSelected]}
-                    onPress={() => setSelectedProject(p.id)}
-                  >
-                    <Text style={[styles.projectOptionText, selectedProject === p.id && styles.projectOptionTextSelected]}>
-                      {p.name}
-                    </Text>
-                    {selectedProject === p.id && <Ionicons name="checkmark" size={16} color={Colors.primary} />}
-                  </TouchableOpacity>
-                ))}
-              </>
-            )}
+            <Text style={styles.label}>Production</Text>
+            <View style={styles.projectList}>
+              {projects.map((project) => (
+                <TouchableOpacity
+                  key={project.id}
+                  style={[styles.projectChip, selectedProject === project.id && styles.projectChipActive]}
+                  onPress={() => setSelectedProject(project.id)}
+                >
+                  <Text style={[styles.projectChipText, selectedProject === project.id && styles.projectChipTextActive]}>
+                    {project.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
 
             <TouchableOpacity
-              style={[styles.button, uploading && { opacity: 0.6 }]}
+              style={[styles.saveButton, uploading && styles.saveButtonDisabled]}
               onPress={handleCreateScene}
               disabled={uploading}
             >
-              {uploading
-                ? <ActivityIndicator color="#000" />
-                : <Text style={styles.buttonText}>Create Scene Canvas</Text>
-              }
+              {uploading ? <ActivityIndicator color="#000" /> : <Text style={styles.saveButtonText}>Save & Open Scene</Text>}
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
@@ -271,92 +243,34 @@ export default function ScannerScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
+  container: { flex: 1, backgroundColor: Colors.background },
   camera: { flex: 1 },
+  overlay: { flex: 1, justifyContent: 'space-between' },
+  topBar: { paddingTop: 60, paddingHorizontal: Spacing.lg },
+  title: { color: '#fff', fontSize: Typography.fontSize2xl, fontWeight: Typography.fontWeightBold, textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 },
+  bottomControls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', paddingBottom: 40, paddingHorizontal: Spacing.xl },
+  captureButton: { width: 76, height: 76, borderRadius: 38, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', borderWidth: 4, borderColor: Colors.primary },
+  captureButtonDisabled: { opacity: 0.6 },
+  captureInner: { width: 58, height: 58, borderRadius: 29, backgroundColor: Colors.primary },
+  galleryButton: { width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
   centered: { flex: 1, backgroundColor: Colors.background, alignItems: 'center', justifyContent: 'center', padding: Spacing.xl },
-  emptyText: { color: Colors.textMuted, fontSize: Typography.fontSizeSm, textAlign: 'center', marginTop: Spacing.md, marginBottom: Spacing.xl, lineHeight: 22 },
-  overlay: { padding: Spacing.xl, paddingTop: Spacing.xxl + Spacing.xl, alignItems: 'center' },
-  overlayTitle: { color: '#fff', fontSize: Typography.fontSizeLg, fontWeight: Typography.fontWeightBold },
-  overlayHint: { color: 'rgba(255,255,255,0.7)', fontSize: Typography.fontSizeXs, marginTop: 4 },
-  controls: {
-    position: 'absolute',
-    bottom: Spacing.xxl,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-    paddingHorizontal: Spacing.xl,
-  },
-  captureButton: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 4,
-    borderColor: 'rgba(255,255,255,0.5)',
-  },
-  captureInner: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#fff',
-  },
-  galleryButton: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  button: {
-    backgroundColor: Colors.primary,
-    borderRadius: Radius.md,
-    paddingVertical: Spacing.sm + 4,
-    alignItems: 'center',
-    marginTop: Spacing.md,
-    minHeight: 48,
-    justifyContent: 'center',
-  },
+  emptyText: { color: Colors.textMuted, fontSize: Typography.fontSizeMd, textAlign: 'center', lineHeight: 24, marginTop: Spacing.md, marginBottom: Spacing.lg },
+  button: { backgroundColor: Colors.primary, borderRadius: Radius.md, paddingHorizontal: Spacing.xl, paddingVertical: Spacing.sm + 4 },
   buttonText: { color: '#000', fontSize: Typography.fontSizeMd, fontWeight: Typography.fontWeightBold },
-  secondaryButton: { marginTop: Spacing.md, padding: Spacing.sm },
+  secondaryButton: { marginTop: Spacing.md, padding: Spacing.md },
   secondaryButtonText: { color: Colors.primary, fontSize: Typography.fontSizeSm },
-  // Modal
   modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
-  modalSheet: {
-    backgroundColor: Colors.surfaceElevated,
-    borderTopLeftRadius: Radius.xl,
-    borderTopRightRadius: Radius.xl,
-    padding: Spacing.xl,
-    paddingBottom: Spacing.xxl,
-  },
+  modalSheet: { backgroundColor: Colors.surfaceElevated, borderTopLeftRadius: Radius.xl, borderTopRightRadius: Radius.xl, padding: Spacing.xl, paddingBottom: Spacing.xxl },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.lg },
-  modalTitle: { fontSize: Typography.fontSizeLg, fontWeight: Typography.fontWeightBold, color: Colors.textPrimary },
-  label: { fontSize: Typography.fontSizeXs, color: Colors.textMuted, marginBottom: Spacing.xs, textTransform: 'uppercase', letterSpacing: 1 },
-  input: {
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.surfaceBorder,
-    borderRadius: Radius.md,
-    color: Colors.textPrimary,
-    fontSize: Typography.fontSizeMd,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm + 4,
-    marginBottom: Spacing.md,
-  },
-  projectOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: Spacing.sm,
-    borderRadius: Radius.md,
-    marginBottom: Spacing.xs,
-    backgroundColor: Colors.surface,
-  },
-  projectOptionSelected: { borderWidth: 1, borderColor: Colors.primary },
-  projectOptionText: { color: Colors.textSecondary, fontSize: Typography.fontSizeSm },
-  projectOptionTextSelected: { color: Colors.primary, fontWeight: Typography.fontWeightSemibold },
+  modalTitle: { color: Colors.textPrimary, fontSize: Typography.fontSizeLg, fontWeight: Typography.fontWeightBold },
+  label: { color: Colors.textMuted, fontSize: Typography.fontSizeXs, textTransform: 'uppercase', letterSpacing: 1, marginBottom: Spacing.xs, marginTop: Spacing.sm },
+  input: { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.surfaceBorder, borderRadius: Radius.md, color: Colors.textPrimary, fontSize: Typography.fontSizeMd, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm + 4, marginBottom: Spacing.md },
+  projectList: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginBottom: Spacing.lg },
+  projectChip: { paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, borderRadius: Radius.full, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.surfaceBorder },
+  projectChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  projectChipText: { color: Colors.textMuted, fontSize: Typography.fontSizeSm },
+  projectChipTextActive: { color: '#000', fontWeight: Typography.fontWeightSemibold },
+  saveButton: { backgroundColor: Colors.primary, borderRadius: Radius.md, paddingVertical: Spacing.sm + 4, alignItems: 'center' },
+  saveButtonDisabled: { opacity: 0.6 },
+  saveButtonText: { color: '#000', fontSize: Typography.fontSizeMd, fontWeight: Typography.fontWeightBold },
 });
